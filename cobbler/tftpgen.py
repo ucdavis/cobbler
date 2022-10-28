@@ -1051,13 +1051,28 @@ class TFTPGen:
                     enums.Archs.S390X,
                 ):
                     append_line += " netdevice=%s" % management_mac
-            elif distro.breed == "debian" or distro.breed == "ubuntu":
+            elif distro.breed == "debian":
                 append_line = (
                     "%s auto-install/enable=true priority=critical netcfg/choose_interface=auto url=%s"
                     % (append_line, autoinstall_path)
                 )
                 if management_interface:
                     append_line += " netcfg/choose_interface=%s" % management_interface
+            # 2022-10-21: OW
+            # https://github.com/cobbler/cobbler/discussions/2698
+            elif distro.breed == "ubuntu":
+                hostname = "DEFAULT"
+                if system is not None:
+                    if system.hostname is not None and system.hostname != "":
+                        # If this is a FQDN, grab the first bit
+                        hostname = system.hostname.split(".")[0]
+                    else:
+                        hostname = system.name
+                    
+                iso_path = "http://%s/ISOs/%s.iso" % (httpserveraddress, distro.name)
+                system_conf_path = "http://%s/nocloud-net/%s/" % (httpserveraddress, hostname)
+                
+                append_line = "%s ip=dhcp url=%s autoinstall ds=nocloud-net;s=%s root=/dev/ram0 cloud-config-url=/dev/null" % (append_line, iso_path, system_conf_path)
             elif distro.breed == "freebsd":
                 append_line = "%s ks=%s" % (append_line, autoinstall_path)
 
