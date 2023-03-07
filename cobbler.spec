@@ -218,7 +218,7 @@ Requires(postun): systemd
 
 Requires:       %{apache_pkg}
 Requires:       %{tftpsrv_pkg}
-Requires:       %{createrepo_pkg}
+#Requires:       %{createrepo_pkg}
 Requires:       fence-agents
 Requires:       rsync
 Requires:       xorriso
