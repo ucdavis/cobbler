@@ -7,15 +7,17 @@ Cobbler module that contains the code for a Cobbler profile object.
 # SPDX-FileCopyrightText: Michael DeHaan <michael.dehaan AT gmail>
 
 import uuid
-from typing import Optional, Union
+from typing import TYPE_CHECKING, List, Optional, Union
 
 from cobbler import autoinstall_manager
 from cobbler.items import item
 from cobbler import validate, enums
 from cobbler.utils import input_converters
 from cobbler.cexceptions import CX
-from cobbler.items.distro import Distro
 from cobbler.decorator import InheritableProperty
+
+if TYPE_CHECKING:
+    from cobbler.api import CobblerAPI
 
 
 class Profile(item.Item):
@@ -26,7 +28,7 @@ class Profile(item.Item):
     TYPE_NAME = "profile"
     COLLECTION_TYPE = "profile"
 
-    def __init__(self, api, *args, **kwargs):
+    def __init__(self, api: "CobblerAPI", *args, **kwargs):
         """
 
         :param api: The Cobbler API object which is used for resolving information.
@@ -34,15 +36,18 @@ class Profile(item.Item):
         :param kwargs:
         """
         super().__init__(api, *args, **kwargs)
+        # Prevent attempts to clear the to_dict cache before the object is initialized.
+        self._has_initialized = False
+
         self._template_files = {}
         self._autoinstall = enums.VALUE_INHERITED
-        self._boot_loaders: Union[list, str] = enums.VALUE_INHERITED
+        self._boot_loaders: Union[List[str], str] = enums.VALUE_INHERITED
         self._dhcp_tag = ""
         self._distro = ""
-        self._enable_ipxe = api.settings().enable_ipxe
-        self._enable_menu = api.settings().enable_menu
-        self._name_servers = api.settings().default_name_servers
-        self._name_servers_search = api.settings().default_name_servers_search
+        self._enable_ipxe = enums.VALUE_INHERITED
+        self._enable_menu = enums.VALUE_INHERITED
+        self._name_servers = enums.VALUE_INHERITED
+        self._name_servers_search = enums.VALUE_INHERITED
         self._next_server_v4 = enums.VALUE_INHERITED
         self._next_server_v6 = enums.VALUE_INHERITED
         self._filename = ""
@@ -52,7 +57,7 @@ class Profile(item.Item):
         self._server = enums.VALUE_INHERITED
         self._menu = ""
         self._display_name = ""
-        self._virt_auto_boot = api.settings().virt_auto_boot
+        self._virt_auto_boot = enums.VALUE_INHERITED
         self._virt_bridge = enums.VALUE_INHERITED
         self._virt_cpus: Union[int, str] = 1
         self._virt_disk_driver = enums.VirtDiskDrivers.INHERITED
@@ -70,17 +75,22 @@ class Profile(item.Item):
         self._mgmt_classes = enums.VALUE_INHERITED
         self._mgmt_parameters = enums.VALUE_INHERITED
 
+        if self._is_subobject:
+            self._filename = enums.VALUE_INHERITED
+
         # Use setters to validate settings
         self.virt_disk_driver = api.settings().default_virt_disk_driver
         self.virt_type = api.settings().default_virt_type
+        if not self._has_initialized:
+            self._has_initialized = True
 
     def __getattr__(self, name):
         if name == "kickstart":
             return self.autoinstall
-        elif name == "ks_meta":
+        if name == "ks_meta":
             return self.autoinstall_meta
         raise AttributeError(
-            'Attribute "%s" did not exist on object type Profile.' % name
+            f'Attribute "{name}" did not exist on object type Profile.'
         )
 
     #
@@ -111,7 +121,7 @@ class Profile(item.Item):
         # distro validation
         distro = self.get_conceptual_parent()
         if distro is None:
-            raise CX("Error with profile %s - distro is required" % self.name)
+            raise CX(f"Error with profile {self.name} - distro is required")
 
     def from_dict(self, dictionary: dict):
         """
@@ -133,59 +143,6 @@ class Profile(item.Item):
     #
 
     @property
-    def parent(self) -> Optional[item.Item]:
-        r"""
-        Instead of a ``--distro``, set the parent of this object to another profile and use the values from the parent
-        instead of this one where the values for this profile aren't filled in, and blend them together where they
-        are dictionaries. Basically this enables profile inheritance. To use this, the object MUST have been
-        constructed with ``is_subobject=True`` or the default values for everything will be screwed up and this will
-        likely NOT work. So, API users -- make sure you pass ``is_subobject=True`` into the constructor when using this.
-
-        Return object next highest up the tree. If this property is not set it falls back to the value of the
-        ``distro``. In case neither distro nor parent is set, it returns None (which would make the profile invalid).
-
-        :getter: The parent object which can be either another profile, a distro or None in case the object could not be
-                 resolved.
-        :setter: The name of the parent object. Might throw a ``CX`` in case the object could not be found.
-        """
-        if not self._parent:
-            parent = self.distro
-            if parent is None:
-                return None
-            return parent
-        else:
-            result = self.api.profiles().find(name=self._parent)
-        return result
-
-    @parent.setter
-    def parent(self, parent: str):
-        r"""
-        Setter for the ``parent`` property.
-
-        :param parent: The name of the parent object.
-        :raises CX: In case self parentage is found or the profile given could not be found.
-        """
-        if not isinstance(parent, str):
-            raise TypeError('Property "parent" must be of type str!')
-        old_parent = self.parent
-        if isinstance(old_parent, item.Item) and self.name in old_parent.children:
-            old_parent.children.remove(self.name)
-        if not parent:
-            self._parent = ""
-            return
-        if parent == self.name:
-            # check must be done in two places as setting parent could be called before/after setting name...
-            raise CX("self parentage is weird")
-        found = self.api.profiles().find(name=parent)
-        if found is None:
-            raise CX('profile "%s" not found, inheritance not possible' % parent)
-        self._parent = parent
-        self.depth = found.depth + 1
-        new_parent = self.parent
-        if isinstance(new_parent, item.Item) and self.name not in new_parent.children:
-            new_parent.children.append(self.name)
-
-    @property
     def arch(self):
         """
         This represents the architecture of a profile. It is read only.
@@ -193,8 +150,8 @@ class Profile(item.Item):
         :getter: ``None`` or the parent architecture.
         """
         # FIXME: This looks so wrong. It cries: Please open a bug for me!
-        parent = self.parent
-        if parent:
+        parent = self.logical_parent
+        if parent is not None:
             return parent.arch
         return None
 
@@ -225,16 +182,11 @@ class Profile(item.Item):
             return
         distro = self.api.distros().find(name=distro_name)
         if distro is None:
-            raise ValueError('distribution "%s" not found' % distro_name)
-        old_parent = self.parent
-        if isinstance(old_parent, item.Item) and self.name in old_parent.children:
-            old_parent.children.remove(self.name)
+            raise ValueError(f'distribution "{distro_name}" not found')
         self._distro = distro_name
         self.depth = (
             distro.depth + 1
         )  # reset depth if previously a subprofile and now top-level
-        if self.name not in distro.children:
-            distro.children.append(self.name)
 
     @InheritableProperty
     def name_servers(self) -> list:
@@ -389,7 +341,7 @@ class Profile(item.Item):
             raise TypeError("Field server of object profile needs to be of type str!")
         self._server = server
 
-    @property
+    @InheritableProperty
     def next_server_v4(self) -> str:
         """
         Represents the next server for IPv4.
@@ -397,7 +349,7 @@ class Profile(item.Item):
         :getter: The IP for the next server.
         :setter: May raise a ``TypeError`` if the new value is not of type ``str``.
         """
-        return self._next_server_v4
+        return self._resolve("next_server_v4")
 
     @next_server_v4.setter
     def next_server_v4(self, server: str = ""):
@@ -414,7 +366,7 @@ class Profile(item.Item):
         else:
             self._next_server_v4 = validate.ipv4_address(server)
 
-    @property
+    @InheritableProperty
     def next_server_v6(self) -> str:
         r"""
         Represents the next server for IPv6.
@@ -422,7 +374,7 @@ class Profile(item.Item):
         :getter: The IP for the next server.
         :setter: May raise a ``TypeError`` if the new value is not of type ``str``.
         """
-        return self._next_server_v6
+        return self._resolve("next_server_v6")
 
     @next_server_v6.setter
     def next_server_v6(self, server: str = ""):
@@ -460,20 +412,16 @@ class Profile(item.Item):
         if not isinstance(filename, str):
             raise TypeError("Field filename of object profile needs to be of type str!")
         parent = self.parent
-        if (
-            filename == enums.VALUE_INHERITED
-            and parent
-            and parent.TYPE_NAME == "distro"
-        ):
+        if filename == enums.VALUE_INHERITED and parent is None:
             filename = ""
         if not filename:
-            if parent and parent.TYPE_NAME == "profile":
+            if parent:
                 filename = enums.VALUE_INHERITED
             else:
                 filename = ""
         self._filename = filename
 
-    @property
+    @InheritableProperty
     def autoinstall(self) -> str:
         """
         Represents the automatic OS installation template file path, this must be a local file.
@@ -481,20 +429,7 @@ class Profile(item.Item):
         :getter: Either the inherited name or the one specific to this profile.
         :setter: The name of the new autoinstall template is validated. The path should come in the format of a ``str``.
         """
-        if self._autoinstall == enums.VALUE_INHERITED:
-            parent = self.parent
-            if parent is not None and isinstance(parent, Profile):
-                return self.parent.autoinstall
-            elif parent is not None and isinstance(parent, Distro):
-                return self.api.settings().autoinstall
-            else:
-                self.logger.info(
-                    'Profile "%s" did not have a valid parent of type Profile but autoinstall is set to '
-                    '"<<inherit>>".',
-                    self.name,
-                )
-                return ""
-        return self._autoinstall
+        return self._resolve("autoinstall")
 
     @autoinstall.setter
     def autoinstall(self, autoinstall: str):
@@ -750,6 +685,8 @@ class Profile(item.Item):
             boot_loaders_split = input_converters.input_string_or_list(boot_loaders)
 
             parent = self.parent
+            if parent is None:
+                parent = self.distro
             if parent is not None:
                 parent_boot_loaders = parent.boot_loaders
             else:
@@ -760,9 +697,8 @@ class Profile(item.Item):
                 parent_boot_loaders = []
             if not set(boot_loaders_split).issubset(parent_boot_loaders):
                 raise CX(
-                    'Error with profile "%s" - not all boot_loaders are supported (given: "%s"; supported:'
-                    '"%s")'
-                    % (self.name, str(boot_loaders_split), str(parent_boot_loaders))
+                    f'Error with profile "{self.name}" - not all boot_loaders are supported (given:'
+                    f'"{str(boot_loaders_split)}"; supported: "{str(parent_boot_loaders)}")'
                 )
             self._boot_loaders = boot_loaders_split
         else:
@@ -791,7 +727,7 @@ class Profile(item.Item):
         if menu and menu != "":
             menu_list = self.api.menus()
             if not menu_list.find(name=menu):
-                raise CX("menu %s not found" % menu)
+                raise CX(f"menu {menu} not found")
         self._menu = menu
 
     @property
@@ -812,22 +748,3 @@ class Profile(item.Item):
         :param display_name: The new display_name. If ``None`` the display_name will be set to an emtpy string.
         """
         self._display_name = display_name
-
-    @property
-    def children(self) -> list:
-        """
-        This property represents all children of a distribution. It should not be set manually.
-
-        :getter: The children of the distro.
-        :setter: No validation is done because this is a Cobbler internal property.
-        """
-        return self._children
-
-    @children.setter
-    def children(self, value: list):
-        """
-        Setter for the children property.
-
-        :param value: The new children of the distro.
-        """
-        self._children = value

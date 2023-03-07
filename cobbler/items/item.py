@@ -13,7 +13,7 @@ import logging
 import pprint
 import re
 import uuid
-from typing import Any, List, Type, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Type, Union, Tuple, Optional
 
 import yaml
 
@@ -22,7 +22,73 @@ from cobbler.utils import input_converters
 from cobbler.cexceptions import CX
 from cobbler.decorator import InheritableProperty, InheritableDictProperty
 
+if TYPE_CHECKING:
+    from cobbler.api import CobblerAPI
+
+
 RE_OBJECT_NAME = re.compile(r"[a-zA-Z0-9_\-.:]*$")
+
+
+class ItemCache:
+    """
+    A Cobbler ItemCache object.
+    """
+
+    def __init__(self, api):
+        """
+        Constructor
+
+        Generalized parameterized cache format:
+           cache_key        cache_value
+         {(P1, P2, .., Pn): value}
+        where P1, .., Pn are cache parameters
+
+        Parameterized cache for to_dict(resolved: bool).
+        The values of the resolved parameter are the key for the Dict.
+        In the to_dict case, there is only one cache parameter and only two key values:
+         {True:  cache_value or None,
+          False: cache_value or None}
+        """
+        self._cached_dict: Dict[bool, Optional[Dict]] = {True: None, False: None}
+
+        self.api = api
+        self.settings = api.settings()
+
+    def get_dict_cache(self, resolved: bool) -> Optional[Dict]:
+        """
+        Gettinging the dict cache.
+
+        :param resolved: "resolved" parameter for Item.to_dict().
+        :return: The cache value for the object, or None if not set.
+        """
+        if self.settings.cache_enabled:
+            return self._cached_dict[resolved]
+        return None
+
+    def set_dict_cache(self, value: Optional[Dict], resolved: bool):
+        """
+        Setter for the dict cache.
+
+        :param value: Sets the value for the dict cache.
+        :param resolved: "resolved" parameter for Item.to_dict().
+        """
+        if self.settings.cache_enabled:
+            self._cached_dict[resolved] = value
+
+    def clean_dict_cache(self):
+        """
+        Cleaninig the dict cache.
+        """
+        if self.settings.cache_enabled:
+            self.set_dict_cache(None, True)
+            self.set_dict_cache(None, False)
+
+    def clean_cache(self):
+        """
+        Cleaninig the Item cache.
+        """
+        if self.settings.cache_enabled:
+            self.clean_dict_cache()
 
 
 class Item:
@@ -33,6 +99,72 @@ class Item:
     # Constants
     TYPE_NAME = "generic"
     COLLECTION_TYPE = "generic"
+
+    # Item types dependencies.
+    # Used to determine descendants and cache invalidation.
+    # Format: {"Item Type": [("Dependent Item Type", "Dependent Type attribute"), ..], [..]}
+    TYPE_DEPENDENCIES: Dict[str, List[Tuple[str, str]]] = {
+        "package": [
+            ("mgmtclass", "packages"),
+        ],
+        "file": [
+            ("mgmtclass", "files"),
+            ("image", "file"),
+        ],
+        "mgmtclass": [
+            ("distro", "mgmt_classes"),
+            ("profile", "mgmt_classes"),
+            ("system", "mgmt_classes"),
+        ],
+        "repo": [
+            ("profile", "repos"),
+        ],
+        "distro": [
+            ("profile", "distro"),
+        ],
+        "menu": [
+            ("menu", "parent"),
+            ("image", "menu"),
+            ("profile", "menu"),
+        ],
+        "profile": [
+            ("profile", "parent"),
+            ("system", "profile"),
+        ],
+        "image": [
+            ("system", "image"),
+        ],
+        "system": [],
+    }
+
+    # Defines a logical hierarchy of Item Types.
+    # Format: {"Item Type": [("Previous level Type", "Attribute to go to the previous level",), ..],
+    #                       [("Next level Item Type", "Attribute to move from the next level"), ..]}
+    LOGICAL_INHERITANCE: Dict[
+        str, Tuple[List[Tuple[str, str]], List[Tuple[str, str]]]
+    ] = {
+        "distro": (
+            [],
+            [
+                ("profile", "distro"),
+            ],
+        ),
+        "profile": (
+            [
+                ("distro", "distro"),
+            ],
+            [
+                ("system", "profile"),
+            ],
+        ),
+        "image": (
+            [],
+            [
+                ("system", "image"),
+            ],
+        ),
+        "system": ([("image", "image"), ("profile", "profile")], []),
+    }
 
     @classmethod
     def __find_compare(
@@ -64,37 +196,53 @@ class Item:
             else:
                 match = fnmatch.fnmatch(from_obj_lower, from_search_lower)
             return match
-        else:
-            if isinstance(from_search, str):
-                if isinstance(from_obj, list):
-                    from_search = input_converters.input_string_or_list(from_search)
-                    for x in from_search:
-                        if x not in from_obj:
-                            return False
-                    return True
-                if isinstance(from_obj, dict):
-                    from_search = input_converters.input_string_or_dict(
-                        from_search, allow_multiples=True
-                    )
-                    for x in list(from_search.keys()):
-                        y = from_search[x]
-                        if x not in from_obj:
-                            return False
-                        if not (y == from_obj[x]):
-                            return False
-                    return True
-                if isinstance(from_obj, bool):
-                    if from_search.lower() in ["true", "1", "y", "yes"]:
-                        inp = True
-                    else:
-                        inp = False
-                    if inp == from_obj:
-                        return True
-                    return False
 
-            raise TypeError("find cannot compare type: %s" % type(from_obj))
+        if isinstance(from_search, str):
+            if isinstance(from_obj, list):
+                from_search = input_converters.input_string_or_list(from_search)
+                for list_element in from_search:
+                    if list_element not in from_obj:
+                        return False
+                return True
+            if isinstance(from_obj, dict):
+                from_search = input_converters.input_string_or_dict(
+                    from_search, allow_multiples=True
+                )
+                for dict_key in list(from_search.keys()):
+                    dict_value = from_search[dict_key]
+                    if dict_key not in from_obj:
+                        return False
+                    if not (dict_value == from_obj[dict_key]):
+                        return False
+                return True
+            if isinstance(from_obj, bool):
+                inp = from_search.lower() in ["true", "1", "y", "yes"]
+                if inp == from_obj:
+                    return True
+                return False
 
-    def __init__(self, api, is_subobject: bool = False):
+        raise TypeError(f"find cannot compare type: {type(from_obj)}")
+
+    @staticmethod
+    def __is_dict_key(name) -> bool:
+        """
+        Whether the attribute is part of the item's to_dict or not
+
+        :name: The attribute name.
+        """
+        return (
+            name.startswith("_")
+            and "__" not in name
+            and name
+            not in {
+                "_last_cached_mtime",
+                "_cache",
+                "_supported_boot_loaders",
+                "_has_initialized",
+            }
+        )
+
+    def __init__(self, api: "CobblerAPI", is_subobject: bool = False):
         """
         Constructor.  Requires a back reference to the CobblerAPI object.
 
@@ -109,6 +257,8 @@ class Item:
                                profile
                                     profile  <-- created with is_subobject=True
                                          system   <-- created as normal
+                           menu
+                               menu
 
         For consistency, there is some code supporting this in all object types, though it is only usable
         (and only should be used) for profiles at this time.  Objects that are children of
@@ -118,9 +268,11 @@ class Item:
         :param api: The Cobbler API object which is used for resolving information.
         :param is_subobject: See above extensive description.
         """
+        # Prevent attempts to clear the to_dict cache before the object is initialized.
+        self._has_initialized = False
+
         self._parent = ""
         self._depth = 0
-        self._children = []
         self._ctime = 0.0
         self._mtime = 0.0
         self._uid = uuid.uuid4().hex
@@ -134,14 +286,15 @@ class Item:
         self._template_files = {}
         self._last_cached_mtime = 0
         self._owners: Union[list, str] = enums.VALUE_INHERITED
-        self._cached_dict = ""
-        self._mgmt_classes: Union[list, str] = []
+        self._cache: ItemCache = ItemCache(api)
+        self._mgmt_classes: Union[list, str] = enums.VALUE_INHERITED
         self._mgmt_parameters: Union[dict, str] = {}
-        self._conceptual_parent = None
         self._is_subobject = is_subobject
 
         self.logger = logging.getLogger()
         self.api = api
+        if not self._has_initialized:
+            self._has_initialized = True
 
     def __eq__(self, other):
         """
@@ -153,6 +306,25 @@ class Item:
         if isinstance(other, Item):
             return self._uid == other.uid
         return False
+
+    def __hash__(self):
+        """
+        Hash table for Items.
+
+        :return: hash(uid).
+        """
+        return hash(self._uid)
+
+    def __setattr__(self, name, value):
+        """
+        Intercepting an attempt to assign a value to an attribute.
+
+        :name: The attribute name.
+        :value: The attribute value.
+        """
+        if self.__is_dict_key(name) and self._has_initialized:
+            self.clean_cache(name)
+        super().__setattr__(name, value)
 
     def _resolve(self, property_name: str) -> Any:
         """
@@ -174,25 +346,24 @@ class Item:
 
         if not hasattr(self, attribute):
             raise AttributeError(
-                '%s "%s" does not have property "%s"'
-                % (type(self), self.name, property_name)
+                f'{type(self)} "{self.name}" does not have property "{property_name}"'
             )
 
         attribute_value = getattr(self, attribute)
         settings = self.api.settings()
 
         if attribute_value == enums.VALUE_INHERITED:
-            if self.parent is not None and hasattr(self.parent, property_name):
-                return getattr(self.parent, property_name)
-            elif hasattr(settings, settings_name):
+            logical_parent = self.logical_parent
+            if logical_parent is not None and hasattr(logical_parent, property_name):
+                return getattr(logical_parent, property_name)
+            if hasattr(settings, settings_name):
                 return getattr(settings, settings_name)
-            elif hasattr(settings, "default_%s" % settings_name):
-                return getattr(settings, "default_%s" % settings_name)
-            else:
-                AttributeError(
-                    '%s "%s" inherits property "%s", but neither its parent nor settings have it'
-                    % (type(self), self.name, property_name)
-                )
+            if hasattr(settings, f"default_{settings_name}"):
+                return getattr(settings, f"default_{settings_name}")
+            AttributeError(
+                f'{type(self)} "{self.name}" inherits property "{property_name}", but neither its parent nor'
+                f"settings have it"
+            )
 
         return attribute_value
 
@@ -207,8 +378,7 @@ class Item:
 
         if not hasattr(self, attribute):
             raise AttributeError(
-                '%s "%s" does not have property "%s"'
-                % (type(self), self.name, property_name)
+                f'{type(self)} "{self.name}" does not have property "{property_name}"'
             )
 
         attribute_value = getattr(self, attribute)
@@ -218,19 +388,17 @@ class Item:
             isinstance(attribute_value, enums.ConvertableEnum)
             and attribute_value.value == enums.VALUE_INHERITED
         ):
-            if self.parent is not None and hasattr(self.parent, property_name):
-                return getattr(self.parent, property_name)
-            elif hasattr(settings, settings_name):
+            logical_parent = self.logical_parent
+            if logical_parent is not None and hasattr(logical_parent, property_name):
+                return getattr(logical_parent, property_name)
+            if hasattr(settings, settings_name):
                 return enum_type.to_enum(getattr(settings, settings_name))
-            elif hasattr(settings, "default_%s" % settings_name):
-                return enum_type.to_enum(
-                    getattr(settings, "default_%s" % settings_name)
-                )
-            else:
-                AttributeError(
-                    '%s "%s" inherits property "%s", but neither its parent nor settings have it'
-                    % (type(self), self.name, property_name)
-                )
+            if hasattr(settings, f"default_{settings_name}"):
+                return enum_type.to_enum(getattr(settings, f"default_{settings_name}"))
+            AttributeError(
+                f'{type(self)} "{self.name}" inherits property "{property_name}", but neither its parent nor'
+                "settings have it"
+            )
 
         return attribute_value
 
@@ -247,8 +415,7 @@ class Item:
 
         if not hasattr(self, attribute):
             raise AttributeError(
-                '%s "%s" does not have property "%s"'
-                % (type(self), self.name, property_name)
+                f'{type(self)} "{self.name}" does not have property "{property_name}"'
             )
 
         attribute_value = getattr(self, attribute)
@@ -256,8 +423,9 @@ class Item:
 
         merged_dict = {}
 
-        if self.parent is not None and hasattr(self.parent, property_name):
-            merged_dict.update(getattr(self.parent, property_name))
+        logical_parent = self.logical_parent
+        if logical_parent is not None and hasattr(logical_parent, property_name):
+            merged_dict.update(getattr(logical_parent, property_name))
         elif hasattr(settings, property_name):
             merged_dict.update(getattr(settings, property_name))
 
@@ -265,7 +433,6 @@ class Item:
             merged_dict.update(attribute_value)
 
         utils.dict_annihilate(merged_dict)
-
         return merged_dict
 
     @property
@@ -333,7 +500,7 @@ class Item:
         if not isinstance(name, str):
             raise TypeError("name must of be type str")
         if not RE_OBJECT_NAME.match(name):
-            raise ValueError("Invalid characters in name: '%s'" % name)
+            raise ValueError(f"Invalid characters in name: '{name}'")
         self._name = name
 
     @property
@@ -407,8 +574,8 @@ class Item:
             self._kernel_options = input_converters.input_string_or_dict(
                 options, allow_multiples=True
             )
-        except TypeError as e:
-            raise TypeError("invalid kernel options") from e
+        except TypeError as error:
+            raise TypeError("invalid kernel options") from error
 
     @InheritableDictProperty
     def kernel_options_post(self) -> dict:
@@ -434,8 +601,8 @@ class Item:
             self._kernel_options_post = input_converters.input_string_or_dict(
                 options, allow_multiples=True
             )
-        except TypeError as e:
-            raise TypeError("invalid post kernel options") from e
+        except TypeError as error:
+            raise TypeError("invalid post kernel options") from error
 
     @InheritableDictProperty
     def autoinstall_meta(self) -> dict:
@@ -511,15 +678,14 @@ class Item:
             if mgmt_parameters == enums.VALUE_INHERITED:
                 self._mgmt_parameters = enums.VALUE_INHERITED
                 return
-            elif mgmt_parameters == "":
+            if mgmt_parameters == "":
                 self._mgmt_parameters = {}
                 return
-            else:
-                mgmt_parameters = yaml.safe_load(mgmt_parameters)
-                if not isinstance(mgmt_parameters, dict):
-                    raise TypeError(
-                        "Input YAML in Puppet Parameter field must evaluate to a dictionary."
-                    )
+            mgmt_parameters = yaml.safe_load(mgmt_parameters)
+            if not isinstance(mgmt_parameters, dict):
+                raise TypeError(
+                    "Input YAML in Puppet Parameter field must evaluate to a dictionary."
+                )
         self._mgmt_parameters = mgmt_parameters
 
     @property
@@ -545,8 +711,8 @@ class Item:
             self._template_files = input_converters.input_string_or_dict(
                 template_files, allow_multiples=False
             )
-        except TypeError as e:
-            raise TypeError("invalid template files specified") from e
+        except TypeError as error:
+            raise TypeError("invalid template files specified") from error
 
     @property
     def boot_files(self) -> dict:
@@ -572,8 +738,8 @@ class Item:
             self._boot_files = input_converters.input_string_or_dict(
                 boot_files, allow_multiples=False
             )
-        except TypeError as e:
-            raise TypeError("invalid boot files specified") from e
+        except TypeError as error:
+            raise TypeError("invalid boot files specified") from error
 
     @InheritableDictProperty
     def fetchable_files(self) -> dict:
@@ -599,8 +765,8 @@ class Item:
             self._fetchable_files = input_converters.input_string_or_dict(
                 fetchable_files, allow_multiples=False
             )
-        except TypeError as e:
-            raise TypeError("invalid fetchable files specified") from e
+        except TypeError as error:
+            raise TypeError("invalid fetchable files specified") from error
 
     @property
     def depth(self) -> int:
@@ -646,15 +812,17 @@ class Item:
         self._mtime = mtime
 
     @property
-    def parent(self):
+    def parent(self) -> Any:
         """
-        This property contains the name of the logical parent of an object. In case there is not parent this return
+        This property contains the name of the parent of an object. In case there is not parent this return
         None.
 
         :getter: Returns the parent object or None if it can't be resolved via the Cobbler API.
         :setter: The name of the new logical parent.
         """
-        return None
+        if self._parent is None or self._parent == "":
+            return None
+        return self.api.get_items(self.COLLECTION_TYPE).get(self._parent)
 
     @parent.setter
     def parent(self, parent: str):
@@ -663,40 +831,95 @@ class Item:
 
         :param parent: The new parent object. This needs to be a descendant in the logical inheritance chain.
         """
+        if not isinstance(parent, str):
+            raise TypeError('Property "parent" must be of type str!')
+        if not parent:
+            self._parent = ""
+            return
+        if parent == self.name:
+            # check must be done in two places as setting parent could be called before/after setting name...
+            raise CX("self parentage is weird")
+        found = self.api.get_items(self.COLLECTION_TYPE).get(parent)
+        if found is None:
+            raise CX(f'profile "{parent}" not found, inheritance not possible')
+        self._parent = parent
+        self.depth = found.depth + 1
+
+    def get_parent(self) -> str:
+        """
+        This method returns the name of the parent for the object. In case there is not parent this return
+        empty string.
+        """
+        return self._parent
+
+    def get_conceptual_parent(self) -> Any:
+        """
+        The parent may just be a superclass for something like a subprofile. Get the first parent of a different type.
+
+        :return: The first item which is conceptually not from the same type.
+        """
+        if self is None:
+            return None
+
+        curr_obj = self
+        next_obj = curr_obj.parent
+        while next_obj is not None:
+            curr_obj = next_obj
+            next_obj = next_obj.parent
+
+        if curr_obj.TYPE_NAME in curr_obj.LOGICAL_INHERITANCE:
+            for prev_level in curr_obj.LOGICAL_INHERITANCE[curr_obj.TYPE_NAME][0]:
+                prev_level_type = prev_level[0]
+                prev_level_name = getattr(curr_obj, "_" + prev_level[1])
+                if prev_level_name is not None and prev_level_name != "":
+                    prev_level_item = self.api.find_items(
+                        prev_level_type, name=prev_level_name, return_list=False
+                    )
+                    if prev_level_item is not None:
+                        return prev_level_item
+        return None
 
     @property
-    def children(self) -> List[str]:
+    def logical_parent(self) -> Any:
+        """
+        This property contains the name of the logical parent of an object. In case there is not parent this return
+        None.
+
+        :getter: Returns the parent object or None if it can't be resolved via the Cobbler API.
+        :setter: The name of the new logical parent.
+        """
+        parent = self.parent
+        if parent is None:
+            return self.get_conceptual_parent()
+        return parent
+
+    @property
+    def children(self) -> List[Any]:
         """
         The list of logical children of any depth.
 
         :getter: An empty list in case of items which don't have logical children.
         :setter: Replace the list of children completely with the new provided one.
         """
-        return []
+        results = []
+        list_items = self.api.get_items(self.COLLECTION_TYPE)
+        for obj in list_items:
+            if obj.get_parent() == self._name:
+                results.append(obj)
+        return results
 
-    @children.setter
-    def children(self, value):
+    def tree_walk(self) -> List[Any]:
         """
-        This is an empty setter to not throw on setting it accidentally.
+        Get all children related by parent/child relationship.
 
-        :param value: The list with children names to replace the current one with.
+        :return: The list of children objects.
         """
-        self.logger.warning(
-            'Tried to set the children property on object "%s" without logical children.',
-            self.name,
-        )
+        results = []
+        for child in self.children:
+            results.append(child)
+            results.extend(child.tree_walk())
 
-    def get_children(self, sort_list: bool = False) -> List[str]:
-        """
-        Get the list of children names.
-
-        :param sort_list: If the list should be sorted alphabetically or not.
-        :return: A copy of the list of children names.
-        """
-        result = copy.deepcopy(self.children)
-        if sort_list:
-            result.sort()
-        return result
+        return results
 
     @property
     def descendants(self) -> list:
@@ -707,13 +930,18 @@ class Item:
 
         :getter: This is a list of all descendants. May be empty if none exist.
         """
-        results = []
-        kids = self.children
-        for kid in kids:
-            # FIXME: Get kid objects
-            grandkids = kid.descendants
-            results.extend(grandkids)
-        return results
+        childs = self.tree_walk()
+        results = set(childs)
+        childs.append(self)
+        for child in childs:
+            for item_type in Item.TYPE_DEPENDENCIES[child.COLLECTION_TYPE]:
+                dep_type_items = self.api.find_items(
+                    item_type[0], {item_type[1]: child.name}
+                )
+                results.update(dep_type_items)
+                for dep_item in dep_type_items:
+                    results.update(dep_item.descendants)
+        return list(results)
 
     @property
     def is_subobject(self) -> bool:
@@ -738,22 +966,6 @@ class Item:
                 "Field is_subobject of object item needs to be of type bool!"
             )
         self._is_subobject = value
-
-    def get_conceptual_parent(self):
-        """
-        The parent may just be a superclass for something like a subprofile. Get the first parent of a different type.
-
-        :return: The first item which is conceptually not from the same type.
-        """
-        mtype = type(self)
-        parent = self.parent
-        while parent is not None:
-            ptype = type(parent)
-            if mtype != ptype:
-                self._conceptual_parent = parent
-                return parent
-            parent = parent.parent
-        return None
 
     def sort_key(self, sort_fields: list):
         """
@@ -845,8 +1057,7 @@ class Item:
 
         if value is None:
             return True
-        else:
-            return self.__find_compare(value, data[key])
+        return self.__find_compare(value, data[key])
 
     def dump_vars(
         self, formatted_output: bool = True, remove_dicts: bool = False
@@ -861,8 +1072,7 @@ class Item:
         raw = utils.blender(self.api, remove_dicts, self)
         if formatted_output:
             return pprint.pformat(raw)
-        else:
-            return raw
+        return raw
 
     def check_if_valid(self):
         """
@@ -891,6 +1101,8 @@ class Item:
             dictionary.pop("ks_meta")
         if "kickstart" in dictionary:
             dictionary.pop("kickstart")
+        if "children" in dictionary:
+            dictionary.pop("children")
 
     def from_dict(self, dictionary: dict):
         """
@@ -910,15 +1122,15 @@ class Item:
                     setattr(self, lowered_key, dictionary[key])
                 except AttributeError as error:
                     raise AttributeError(
-                        'Attribute "%s" could not be set!' % lowered_key
+                        f'Attribute "{lowered_key}" could not be set!'
                     ) from error
                 result.pop(key)
         if len(result) > 0:
             raise KeyError(
-                "The following keys supplied could not be set: %s" % result.keys()
+                f"The following keys supplied could not be set: {result.keys()}"
             )
 
-    def to_dict(self, resolved: bool = False) -> dict:
+    def to_dict(self, resolved: bool = False) -> Dict[str, Any]:
         """
         This converts everything in this object to a dictionary.
 
@@ -926,20 +1138,19 @@ class Item:
                      objects raw value.
         :return: A dictionary with all values present in this object.
         """
+        cached_result = self.cache.get_dict_cache(resolved)
+        if cached_result is not None:
+            return cached_result
+
         value = {}
-        for key in self.__dict__:
-            if key.startswith("_") and not key.startswith("__"):
-                if key in (
-                    "_conceptual_parent",
-                    "_last_cached_mtime",
-                    "_cached_dict",
-                    "_supported_boot_loaders",
-                ):
-                    continue
+        for key, key_value in self.__dict__.items():
+            if self.__is_dict_key(key):
                 new_key = key[1:].lower()
-                key_value = self.__dict__[key]
                 if isinstance(key_value, enum.Enum):
-                    value[new_key] = key_value.value
+                    if resolved:
+                        value[new_key] = getattr(self, new_key).value
+                    else:
+                        value[new_key] = key_value.value
                 elif new_key == "interfaces":
                     # This is the special interfaces dict. Lets fix it before it gets to the normal process.
                     serialized_interfaces = {}
@@ -947,7 +1158,7 @@ class Item:
                     for interface_key in interfaces:
                         serialized_interfaces[interface_key] = interfaces[
                             interface_key
-                        ].to_dict()
+                        ].to_dict(resolved)
                     value[new_key] = serialized_interfaces
                 elif isinstance(key_value, list):
                     value[new_key] = copy.deepcopy(key_value)
@@ -963,11 +1174,12 @@ class Item:
                 ):
                     value[new_key] = getattr(self, key[1:])
                 else:
-                    value[new_key] = self.__dict__[key]
+                    value[new_key] = key_value
         if "autoinstall" in value:
             value.update({"kickstart": value["autoinstall"]})
         if "autoinstall_meta" in value:
             value.update({"ks_meta": value["autoinstall_meta"]})
+        self.cache.set_dict_cache(value, resolved)
         return value
 
     def serialize(self) -> dict:
@@ -1004,10 +1216,10 @@ class Item:
                  itself and the settings of Cobbler.
         """
         results = [self]
-        parent = self.parent
+        parent = self.logical_parent
         while parent is not None:
             results.append(parent)
-            parent = parent.parent
+            parent = parent.logical_parent
             # FIXME: Now get the object and check its existence
         results.append(self.api.settings())
         self.logger.debug(
@@ -1015,3 +1227,49 @@ class Item:
             len(results),
         )
         return results
+
+    @property
+    def cache(self) -> ItemCache:
+        """
+        Gettinging the ItemCache oject.
+
+        .. note:: This is a read only property.
+
+        :getter: This is the ItemCache oject.
+        """
+        return self._cache
+
+    def _clean_dict_cache(self, name: Optional[str]):
+        """
+        Clearing the Item dict cache.
+
+        :param obj: The object whose modification invalidates the dict cache.
+                    Can be Item, Settings or SIGNATURE_CACHE.
+        :param name: The name of Item attribute or None.
+        """
+        if not self.api.settings().cache_enabled:
+            return
+
+        if name is not None:
+            attr = getattr(type(self), name[1:])
+            if (
+                isinstance(attr, (InheritableProperty, InheritableDictProperty))
+                and self.COLLECTION_TYPE != Item.COLLECTION_TYPE
+                and self.api.get_items(self.COLLECTION_TYPE).get(self.name) is not None
+            ):
+                # Invalidating "resolved" caches
+                for dep_item in self.descendants:
+                    dep_item.cache.set_dict_cache(None, True)
+
+        # Invalidating the cache of the object itself.
+        self.cache.clean_dict_cache()
+
+    def clean_cache(self, name: Optional[str] = None):
+        """
+        Clearing the Item cache.
+
+        :param obj: The object whose modification invalidates the dict cache.
+                    Can be Item, Settings or SIGNATURE_CACHE.
+        :param name: The name of Item attribute or None.
+        """
+        self._clean_dict_cache(name)

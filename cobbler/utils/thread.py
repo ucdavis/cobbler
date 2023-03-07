@@ -5,7 +5,7 @@ This module is responsible for managing the custom common threading logic Cobble
 import logging
 import pathlib
 from threading import Thread
-from typing import Callable
+from typing import Optional, Callable
 
 from cobbler import enums
 from cobbler import utils
@@ -24,7 +24,7 @@ class CobblerThread(Thread):
         task_name: str,
         api,
         run: Callable,
-        on_done: Callable = None,
+        on_done: Optional[Callable] = None,
     ):
         """
         This constructor creates a Cobbler thread which then may be run by calling ``run()``.
@@ -97,8 +97,8 @@ class CobblerThread(Thread):
             ):
                 self._set_task_state(enums.EventStatus.FAILED)
                 return False
-            rc = self._run(self)
-            if rc is not None and not rc:
+            return_code = self._run(self)
+            if return_code is not None and not return_code:
                 self._set_task_state(enums.EventStatus.FAILED)
             else:
                 self._set_task_state(enums.EventStatus.COMPLETE)
@@ -109,7 +109,7 @@ class CobblerThread(Thread):
                     globber=f"/var/lib/cobbler/triggers/task/{self.task_name}/post/*",
                     additional=self.options,
                 )
-            return rc
+            return return_code
         except Exception:
             utils.log_exc()
             self._set_task_state(enums.EventStatus.FAILED)

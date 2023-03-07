@@ -1582,7 +1582,7 @@
           ".disk"
         ],
         "version_file": "Release|info",
-        "version_file_regex": "Suite: jammy|Ubuntu-Server 22\\.04",
+        "version_file_regex": "Suite: jammy|Ubuntu 22.04",
         "kernel_arch": "linux-headers-(.*)\\.deb",
         "kernel_arch_regex": null,
         "supported_arches": [
@@ -3271,7 +3271,7 @@
         "kernel_options_post": "",
         "boot_files": []
       },
-      "XP": {
+      "xp": {
         "signatures": [
           "amd64",
           "i386",

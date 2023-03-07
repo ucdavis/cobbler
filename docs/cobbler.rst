@@ -169,7 +169,7 @@ If you want to be explicit with distribution definition, however, here's how it 
 |                 | objects (distros, profiles, systems, and repos) can take a --owners parameter to specify what       |
 |                 | Cobbler users can edit particular objects.This only applies to the Cobbler WebUI and XML-RPC        |
 |                 | interface, not the "cobbler" command line tool run from the shell. Furthermore, this is only        |
-|                 | respected by the ``authz_ownership`` module which must be enabled in ``/etc/cobbler/modules.conf``. |
+|                 | respected by the ``authorization.ownership`` module which must be enabled in the settings.          |
 |                 | The value for ``--owners`` is a space separated list of users and groups as specified in            |
 |                 | ``/etc/cobbler/users.conf``. For more information see the users.conf file as well as the Cobbler    |
 |                 | Wiki. In the default Cobbler configuration, this value is completely ignored, as is ``users.conf``. |
@@ -262,8 +262,8 @@ listed below:
 |                     | objects (distros, profiles, systems, and repos) can take a --owners parameter to specify what  |
 |                     | Cobbler users can edit particular objects.This only applies to the Cobbler WebUI and XML-RPC   |
 |                     | interface, not the "cobbler" command line tool run from the shell. Furthermore, this is only   |
-|                     | respected by the ``authz_ownership`` module which must be enabled in                           |
-|                     | ``/etc/cobbler/modules.conf``. The value for ``--owners`` is a space separated list of users   |
+|                     | respected by the ``authorization.ownership`` module which must be enabled in                   |
+|                     | the settings. The value for ``--owners`` is a space separated list of users                    |
 |                     | and groups as specified in ``/etc/cobbler/users.conf``.                                        |
 |                     | For more information see the users.conf file as well as the Cobbler                            |
 |                     | Wiki. In the default Cobbler configuration, this value is completely ignored, as is            |
@@ -478,36 +478,39 @@ Adds a Cobbler System to the configuration. Arguments are specified as per "prof
 |                     |                                                                                                |
 |                     | Example:                                                                                       |
 |                     |                                                                                                |
-|                     | cobbler system edit --name=foo \                                                               |
-|                     |                     --interface=eth0 \                                                         |
-|                     |                     --mac=AA:BB:CC:DD:EE:00 \                                                  |
-|                     |                     --interface-type=bond_slave \                                              |
-|                     |                     --interface-master=bond0                                                   |
+|                     | .. code-block::                                                                                |
 |                     |                                                                                                |
-|                     | cobbler system edit --name=foo \                                                               |
-|                     |                     --interface=eth1 \                                                         |
-|                     |                     --mac=AA:BB:CC:DD:EE:01 \                                                  |
-|                     |                     --interface-type=bond_slave \                                              |
-|                     |                     --interface-master=bond0                                                   |
-|                     |                                                                                                |
-|                     | cobbler system edit --name=foo \                                                               |
-|                     |                     --interface=bond0 \                                                        |
-|                     |                     --interface-type=bond \                                                    |
-|                     |                     --bonding-opts="mode=active-backup miimon=100" \                           |
-|                     |                     --ip-address=192.168.0.63 \                                                |
-|                     |                     --netmask=255.255.255.0 \                                                  |
-|                     |                     --gateway=192.168.0.1 \                                                    |
-|                     |                     --static=1                                                                 |
+|                     |     cobbler system edit --name=foo \                                                           |
+|                     |                         --interface=eth0 \                                                     |
+|                     |                         --mac=AA:BB:CC:DD:EE:00 \                                              |
+|                     |                         --interface-type=bond_slave \                                          |
+|                     |                         --interface-master=bond0                                               |
+|                     |     cobbler system edit --name=foo \                                                           |
+|                     |                         --interface=eth1 \                                                     |
+|                     |                         --mac=AA:BB:CC:DD:EE:01 \                                              |
+|                     |                         --interface-type=bond_slave \                                          |
+|                     |                         --interface-master=bond0                                               |
+|                     |     cobbler system edit --name=foo \                                                           |
+|                     |                         --interface=bond0 \                                                    |
+|                     |                         --interface-type=bond \                                                |
+|                     |                         --bonding-opts="mode=active-backup miimon=100" \                       |
+|                     |                         --ip-address=192.168.0.63 \                                            |
+|                     |                         --netmask=255.255.255.0 \                                              |
+|                     |                         --gateway=192.168.0.1 \                                                |
+|                     |                         --static=1                                                             |
 |                     |                                                                                                |
 |                     | More information about networking setup is available at                                        |
-|                     | https://github.com/cobbler/cobbler/wiki/Advanced-networking                                    |
+|                     | :doc:`Advanced Networking </user-guide/advanced-networking>`                                   |
 |                     |                                                                                                |
 |                     | To review what networking configuration you have for any object, run "cobbler system report"   |
 |                     | at any time:                                                                                   |
 |                     |                                                                                                |
 |                     | Example:                                                                                       |
 |                     |                                                                                                |
-|                     | cobbler system report --name=foo                                                               |
+|                     | .. code-block::                                                                                |
+|                     |                                                                                                |
+|                     |     cobbler system report --name=foo                                                           |
+|                     |                                                                                                |
 +---------------------+------------------------------------------------------------------------------------------------+
 | if-gateway          | If you are using static IP configurations and have multiple interfaces, use this to define     |
 |                     | different gateway for each interface.                                                          |
@@ -601,8 +604,8 @@ Adds a Cobbler System to the configuration. Arguments are specified as per "prof
 |                     | objects (distros, profiles, systems, and repos) can take a --owners parameter to specify what  |
 |                     | Cobbler users can edit particular objects.This only applies to the Cobbler WebUI and XML-RPC   |
 |                     | interface, not the "cobbler" command line tool run from the shell. Furthermore, this is only   |
-|                     | respected by the ``authz_ownership`` module which must be enabled in                           |
-|                     | ``/etc/cobbler/modules.conf``. The value for ``--owners`` is a space separated list of users   |
+|                     | respected by the ``authorization.ownership`` module which must be enabled in                   |
+|                     | the settings. The value for ``--owners`` is a space separated list of users                    |
 |                     | and groups as specified in ``/etc/cobbler/users.conf``.                                        |
 |                     | For more information see the users.conf file as well as the Cobbler                            |
 |                     | Wiki. In the default Cobbler configuration, this value is completely ignored, as is            |
@@ -751,8 +754,8 @@ probably be overkill, though it can be very useful for larger setups (labs, data
 |                  | objects (distros, profiles, systems, and repos) can take a --owners parameter to specify what     |
 |                  | Cobbler users can edit particular objects.This only applies to the Cobbler WebUI and XML-RPC      |
 |                  | interface, not the "cobbler" command line tool run from the shell. Furthermore, this is only      |
-|                  | respected by the ``authz_ownership`` module which must be enabled in                              |
-|                  | ``/etc/cobbler/modules.conf``. The value for ``--owners`` is a space separated list of users      |
+|                  | respected by the ``authorization.ownership`` module which must be enabled in                      |
+|                  | the settings. The value for ``--owners`` is a space separated list of users                       |
 |                  | and groups as specified in ``/etc/cobbler/users.conf``.                                           |
 |                  | For more information see the users.conf file as well as the Cobbler                               |
 |                  | Wiki. In the default Cobbler configuration, this value is completely ignored, as is               |
@@ -810,13 +813,13 @@ memdisk - Oracle / Sun Maintenance CD
 -------------------------------------
 
 The 'memdisk' image type can be used to PXE boot Oracle / Sun maintenance CDs.
-`Their manual <http://docs.oracle.com/cd/E19121-01/sf.x2250/820-4593-12/AppB.html#50540564_72480>`_ gives details on how
-to copy the image from a CD to a PXE server. The procedure is even easier with Cobbler since the system takes care of most of
-it for you.
+`Their manual <https://docs.oracle.com/cd/E19121-01/sf.x2250/820-4593-12/AppB.html#50540564_72480>`_ gives details on
+how to copy the image from a CD to a PXE server. The procedure is even easier with Cobbler since the system takes care
+of most of it for you.
 
 Take your ISO for the boot CD and mount it as a loopback mount somewhere on your Cobbler server then copy the
-``boot.img`` file into your tftpboot directory. Then add an image of type ``memdisk`` which uses it. Right now the following shell command will fail due to a known bug but the web interface can be used instead
-to add the image.
+``boot.img`` file into your tftpboot directory. Then add an image of type ``memdisk`` which uses it. Right now the
+following shell command will fail due to a known bug but the web interface can be used instead to add the image.
 
 .. code-block:: shell
 
@@ -1066,7 +1069,7 @@ Cobbler replicate
 =================
 
 Cobbler can replicate configurations from a master Cobbler server. Each Cobbler server is still expected to have a
-locally relevant ``/etc/cobbler/cobbler.conf`` and ``modules.conf``, as these files are not synced.
+locally relevant ``/etc/cobbler/settings.yaml``, as this file is not synced.
 
 This feature is intended for load-balancing, disaster-recovery, backup, or multiple geography support.
 
@@ -1102,11 +1105,8 @@ most of the other Cobbler commands (currently: distro, profile, system, repo, im
 
 .. code-block:: shell
 
-    $ cobbler report --name=[object-name]
+    $ cobbler report
 
---name=[object-name]
-
-Optional parameter which filters for object with the given name.
 
 .. _cobbler-cli-reposync:
 

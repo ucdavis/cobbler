@@ -1,7 +1,7 @@
 # vim: ft=dockerfile
 
 # WARNING! This is not in any way production ready. It is just for testing!
-FROM registry.opensuse.org/opensuse/leap:15.3
+FROM registry.opensuse.org/opensuse/leap:15.4
 
 # ENV Variables we are using.
 ENV container docker
@@ -12,7 +12,7 @@ RUN zypper install --no-recommends -y \
     acl                        \
     apache2                    \
     apache2-devel              \
-    apache2-mod_wsgi-python3   \
+    nginx                      \
     bash-completion            \
     createrepo_c               \
     fence-agents               \
@@ -39,8 +39,15 @@ RUN zypper install --no-recommends -y \
     python3-requests           \
     python3-PyYAML             \
     python3-pykickstart        \
+    python3-pycodestyle        \
+    python3-pyflakes           \
+    python3-pytest-cov         \
+    python3-pytest-mock        \
+    python3-pytest-pythonpath  \
+    python3-pytest-benchmark   \
     python3-netaddr            \
     python3-pymongo            \
+    python3-gunicorn           \
     rpm-build                  \
     rsync                      \
     supervisor                 \
@@ -53,11 +60,11 @@ RUN zypper install --no-recommends -y \
     xorriso
 
 # Add virtualization repository
-RUN zypper ar https://download.opensuse.org/repositories/Virtualization/15.3/Virtualization.repo
-RUN zypper --gpg-auto-import-keys install -y --from "Virtualization (15.3)" python3-hivex
+RUN zypper ar https://download.opensuse.org/repositories/Virtualization/15.4/Virtualization.repo
+RUN zypper --gpg-auto-import-keys install -y --from "Virtualization (15.4)" python3-hivex
 RUN zypper rr "Virtualization (15.3)"
-RUN zypper ar https://download.opensuse.org/repositories/devel:/languages:/python/15.3/devel:languages:python.repo
-RUN zypper --gpg-auto-import-keys install -y --from "Python Modules (15.3)" python3-pefile
+RUN zypper ar https://download.opensuse.org/repositories/devel:/languages:/python/15.4/devel:languages:python.repo
+RUN zypper --gpg-auto-import-keys install -y --from "Python Modules (15.4)" python3-pefile
 RUN zypper rr "Python Modules (15.3)"
 
 # Add bootloader packages
@@ -86,8 +93,7 @@ RUN zypper install --no-recommends -y \
 RUN zypper install --no-recommends -y \
     python3-librepo                   \
     dnf                               \
-    dnf-plugins-core                  \
-    wget
+    dnf-plugins-core
 
 # Required for reposync apt test
 RUN zypper install --no-recommends -y \
@@ -95,7 +101,7 @@ RUN zypper install --no-recommends -y \
     perl-Net-INET6Glue                \
     perl-LWP-Protocol-https           \
     ed
-RUN dnf install -y http://download.fedoraproject.org/pub/fedora/linux/releases/35/Everything/x86_64/os/Packages/d/debmirror-2.35-2.fc35.noarch.rpm
+RUN dnf install -y http://download.fedoraproject.org/pub/fedora/linux/releases/37/Everything/x86_64/os/Packages/d/debmirror-2.36-4.fc37.noarch.rpm
 
 # Dependencies for system-tests
 RUN zypper install --no-recommends -y \
@@ -113,25 +119,18 @@ RUN useradd -p $(perl -e 'print crypt("test", "password")') test
 # Add Developer scripts to PATH
 ENV PATH="/code/docker/develop/scripts:${PATH}"
 
-# Update pip
-RUN pip3 install --upgrade pip
-
 # Install packages and dependencies via pip
-RUN pip3 install      \
-    codecov           \
-    file-magic        \
-    pycodestyle       \
-    pyflakes          \
-    pytest            \
-    pytest-cov        \
-    pytest-mock       \
-    pytest-pythonpath
+RUN pip3 install file-magic
+# We need pytest greater 6
+RUN pip3 install -U pytest
+
+# Install codecov
+RUN curl -Os https://uploader.codecov.io/latest/linux/codecov && chmod +x codecov
 
 # Enable the Apache Modules
 RUN ["a2enmod", "version"]
 RUN ["a2enmod", "proxy"]
 RUN ["a2enmod", "proxy_http"]
-RUN ["a2enmod", "wsgi"]
 
 # create working directory
 RUN ["mkdir", "/code"]

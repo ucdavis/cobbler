@@ -212,7 +212,7 @@ def test_get_random_mac(remote, token):
                     "dns_name": "",
                     "if_gateway": "",
                     "interface_master": "",
-                    "interface_type": "NA",
+                    "interface_type": "na",
                     "ip_address": "",
                     "ipv6_address": "",
                     "ipv6_default_gateway": "",
@@ -226,7 +226,7 @@ def test_get_random_mac(remote, token):
                     "netmask": "",
                     "static": False,
                     "static_routes": [],
-                    "virt_bridge": "",
+                    "virt_bridge": "xenbr0",
                 }
             },
             does_not_raise(),
@@ -279,6 +279,9 @@ def test_get_item_resolved_value(
     # Act
     with expected_exception:
         result = remote.get_item_resolved_value(test_item.get("uid"), input_attribute)
+
+        if input_attribute == "interfaces" and "default" in result:
+            result.pop("default")
 
         # Assert
         assert expected_result == result

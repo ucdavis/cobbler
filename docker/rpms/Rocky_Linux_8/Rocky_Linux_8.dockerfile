@@ -44,7 +44,7 @@ RUN touch /var/lib/rpm/* &&   \
 RUN touch /var/lib/rpm/* &&   \
     dnf install -y            \
     httpd                     \
-    python3-mod_wsgi          \
+    python3-gunicorn          \
     python3-pyyaml            \
     python3-netaddr           \
     python3-cheetah           \
@@ -74,8 +74,8 @@ RUN touch /var/lib/rpm/* &&   \
     time
 RUN dnf --enablerepo=plus -y install openldap-servers
 
-COPY ./docker/rpms/Fedora_34/supervisord/supervisord.conf /etc/supervisord.conf
-COPY ./docker/rpms/Fedora_34/supervisord/conf.d /etc/supervisord/conf.d
+COPY ./docker/rpms/Fedora_37/supervisord/supervisord.conf /etc/supervisord.conf
+COPY ./docker/rpms/Fedora_37/supervisord/conf.d /etc/supervisord/conf.d
 
 COPY . /usr/src/cobbler
 WORKDIR /usr/src/cobbler

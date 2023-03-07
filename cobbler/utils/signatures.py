@@ -3,13 +3,21 @@ TODO
 """
 
 import json
+from typing import TYPE_CHECKING, List, Optional, Union
 
 from cobbler import utils
+
+if TYPE_CHECKING:
+    from cobbler.api import CobblerAPI
+    from cobbler.items.distro import Distro
+    from cobbler.items.image import Image
 
 SIGNATURE_CACHE = {}
 
 
-def get_supported_distro_boot_loaders(distro, api_handle=None):
+def get_supported_distro_boot_loaders(
+    distro: Union["Distro", "Image"], api_handle: Optional["CobblerAPI"] = None
+) -> List[str]:
     """
     This is trying to return you the list of known bootloaders if all resorts fail. Otherwise this returns a list which
     contains only the subset of bootloaders which are available by the distro in the argument.
@@ -23,13 +31,13 @@ def get_supported_distro_boot_loaders(distro, api_handle=None):
         return api_handle.get_signatures()["breeds"][distro.breed][distro.os_version][
             "boot_loaders"
         ][distro.arch.value]
-    except:
+    except Exception:
         try:
             # Try to read directly from the cache
             return SIGNATURE_CACHE["breeds"][distro.breed][distro.os_version][
                 "boot_loaders"
             ][distro.arch.value]
-        except:
+        except Exception:
             try:
                 # Else use some well-known defaults
                 return {
@@ -41,7 +49,7 @@ def get_supported_distro_boot_loaders(distro, api_handle=None):
                     "i386": ["grub", "pxe", "ipxe"],
                     "x86_64": ["grub", "pxe", "ipxe"],
                 }[distro.arch.value]
-            except:
+            except Exception:
                 # Else return the globally known list
                 return utils.get_supported_system_boot_loaders()
 
@@ -53,10 +61,11 @@ def load_signatures(filename, cache: bool = True):
     :param filename: Loads the file with the given name.
     :param cache: If the cache should be set with the newly read data.
     """
-    global SIGNATURE_CACHE
+    # Signature cache is module wide and thus requires global
+    global SIGNATURE_CACHE  # pylint: disable=global-statement
 
-    with open(filename, "r") as f:
-        sigjson = f.read()
+    with open(filename, "r", encoding="UTF-8") as signature_file_fd:
+        sigjson = signature_file_fd.read()
     sigdata = json.loads(sigjson)
     if cache:
         SIGNATURE_CACHE = sigdata
@@ -68,8 +77,7 @@ def get_valid_breeds() -> list:
     """
     if "breeds" in SIGNATURE_CACHE:
         return list(SIGNATURE_CACHE["breeds"].keys())
-    else:
-        return []
+    return []
 
 
 def get_valid_os_versions_for_breed(breed) -> list:
@@ -96,7 +104,7 @@ def get_valid_os_versions() -> list:
     try:
         for breed in get_valid_breeds():
             os_versions += list(SIGNATURE_CACHE["breeds"][breed].keys())
-    except:
+    except Exception:
         pass
     return utils.uniquify(os_versions)
 
@@ -114,6 +122,6 @@ def get_valid_archs():
                 archs += SIGNATURE_CACHE["breeds"][breed][operating_system][
                     "supported_arches"
                 ]
-    except:
+    except Exception:
         pass
     return utils.uniquify(archs)

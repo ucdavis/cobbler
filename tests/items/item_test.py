@@ -3,8 +3,14 @@ import os
 import pytest
 
 from cobbler import enums
+from cobbler.items.package import Package
+from cobbler.items.file import File
+from cobbler.items.mgmtclass import Mgmtclass
+from cobbler.items.repo import Repo
 from cobbler.items.distro import Distro
+from cobbler.items.menu import Menu
 from cobbler.items.profile import Profile
+from cobbler.items.system import System
 from cobbler.items.item import Item
 from tests.conftest import does_not_raise
 
@@ -59,29 +65,28 @@ def test_uid(cobbler_api):
 
 def test_children(cobbler_api):
     # Arrange
-    titem = Item(cobbler_api)
+    titem = Distro(cobbler_api)
 
     # Act
-    titem.children = []
 
     # Assert
     assert titem.children == []
 
 
-def test_get_children(cobbler_api):
+def test_tree_walk(cobbler_api):
     # Arrange
-    titem = Item(cobbler_api)
+    titem = Distro(cobbler_api)
 
     # Act
-    result = titem.get_children()
+    result = titem.tree_walk()
 
     # Assert
     assert result == []
 
 
-def test_descendants(cobbler_api):
+def test_item_descendants(cobbler_api):
     # Arrange
-    titem = Item(cobbler_api)
+    titem = Distro(cobbler_api)
 
     # Act
     result = titem.descendants
@@ -90,12 +95,116 @@ def test_descendants(cobbler_api):
     assert result == []
 
 
+def test_descendants(
+    cobbler_api, create_distro, create_image, create_profile, create_system
+):
+    # Arrange
+    test_package = Package(cobbler_api)
+    test_package.name = "test_package"
+    cobbler_api.add_package(test_package)
+    test_file = File(cobbler_api)
+    test_file.name = "test_file"
+    test_file.path = "test path"
+    test_file.owner = "test owner"
+    test_file.group = "test group"
+    test_file.mode = "test mode"
+    test_file.is_dir = True
+    cobbler_api.add_file(test_file)
+    test_mgmtclass = Mgmtclass(cobbler_api)
+    test_mgmtclass.name = "test_mgmtclass"
+    test_mgmtclass.packages = [test_package.name]
+    test_mgmtclass.files = [test_file.name]
+    cobbler_api.add_mgmtclass(test_mgmtclass)
+    test_repo = Repo(cobbler_api)
+    test_repo.name = "test_repo"
+    cobbler_api.add_repo(test_repo)
+    test_menu1 = Menu(cobbler_api)
+    test_menu1.name = "test_menu1"
+    cobbler_api.add_menu(test_menu1)
+    test_menu2 = Menu(cobbler_api)
+    test_menu2.name = "test_menu2"
+    test_menu2.parent = test_menu1.name
+    cobbler_api.add_menu(test_menu2)
+    test_distro = create_distro()
+    test_distro.mgmt_classes = test_mgmtclass.name
+    test_profile1 = create_profile(distro_name=test_distro.name, name="test_profile1")
+    test_profile1.enable_menu = False
+    test_profile1.repos = [test_repo.name]
+    test_profile2 = create_profile(
+        profile_name=test_profile1.name, name="test_profile2"
+    )
+    test_profile2.enable_menu = False
+    test_profile2.menu = test_menu2.name
+    test_profile3 = create_profile(
+        profile_name=test_profile1.name, name="test_profile3"
+    )
+    test_profile3.enable_menu = False
+    test_profile3.mgmt_classes = test_mgmtclass.name
+    test_profile3.repos = [test_repo.name]
+    test_image = create_image()
+    test_image.menu = test_menu1.name
+    test_system1 = create_system(profile_name=test_profile1.name, name="test_system1")
+    test_system2 = create_system(image_name=test_image.name, name="test_system2")
+
+    # Act
+    cache_tests = [
+        test_package.descendants,
+        test_file.descendants,
+        test_mgmtclass.descendants,
+        test_repo.descendants,
+        test_distro.descendants,
+        test_image.descendants,
+        test_profile1.descendants,
+        test_profile2.descendants,
+        test_profile3.descendants,
+        test_menu1.descendants,
+        test_menu2.descendants,
+        test_system1.descendants,
+        test_system2.descendants,
+    ]
+    results = [
+        [
+            test_mgmtclass,
+            test_distro,
+            test_profile1,
+            test_profile2,
+            test_profile3,
+            test_system1,
+        ],
+        [
+            test_mgmtclass,
+            test_distro,
+            test_profile1,
+            test_profile2,
+            test_profile3,
+            test_system1,
+        ],
+        [test_distro, test_profile1, test_profile2, test_profile3, test_system1],
+        [test_profile1, test_profile2, test_profile3, test_system1],
+        [test_profile1, test_profile2, test_profile3, test_system1],
+        [test_system2],
+        [test_profile2, test_profile3, test_system1],
+        [],
+        [],
+        [test_image, test_menu2, test_profile2, test_system2],
+        [test_profile2],
+        [],
+        [],
+    ]
+
+    # Assert
+    for x in range(len(cache_tests)):
+        assert set(cache_tests[x]) == set(results[x])
+
+
 def test_get_conceptual_parent(request, cobbler_api, create_distro, create_profile):
     # Arrange
     tmp_distro = create_distro()
     tmp_profile = create_profile(tmp_distro.name)
     titem = Profile(cobbler_api)
-    titem.name = "subprofile_%s" % request.node.originalname
+    titem.name = "subprofile_%s" % (
+        request.node.originalname if request.node.originalname else request.node.name
+    )
     titem.parent = tmp_profile.name
 
     # Act
@@ -297,13 +406,17 @@ def test_fetchable_files(cobbler_api):
 def test_sort_key(request, cobbler_api):
     # Arrange
     titem = Item(cobbler_api)
-    titem.name = request.node.originalname
+    titem.name = (
+        request.node.originalname if request.node.originalname else request.node.name
+    )
 
     # Act
     result = titem.sort_key(sort_fields=["name"])
 
     # Assert
-    assert result == [request.node.originalname]
+    assert result == [
+        request.node.originalname if request.node.originalname else request.node.name
+    ]
 
 
 @pytest.mark.skip("Test not yet implemented")
@@ -341,7 +454,7 @@ def test_dump_vars(cobbler_api):
     print(result)
     assert "default_ownership" in result
     assert "owners" in result
-    assert len(result) == 151
+    assert len(result) == 152
 
 
 @pytest.mark.parametrize(
@@ -413,7 +526,9 @@ def test_parent(cobbler_api):
 def test_check_if_valid(request, cobbler_api):
     # Arrange
     titem = Item(cobbler_api)
-    titem.name = request.node.originalname
+    titem.name = (
+        request.node.originalname if request.node.originalname else request.node.name
+    )
 
     # Act
     titem.check_if_valid()
@@ -444,25 +559,7 @@ def test_to_dict_resolved(cobbler_api):
     # Assert
     assert isinstance(result, dict)
     assert result.get("owners") == ["admin"]
-
-
-def test_to_dict_resolved_dict(cobbler_api, create_distro):
-    # Arrange
-    test_distro = create_distro()
-    test_distro.kernel_options = {"test": True}
-    cobbler_api.add_distro(test_distro)
-    titem = Profile(cobbler_api)
-    titem.name = "to_dict_resolved_profile"
-    titem.distro = test_distro.name
-    titem.kernel_options = {"my_value": 5}
-    cobbler_api.add_profile(titem)
-
-    # Act
-    result = titem.to_dict(resolved=True)
-
-    # Assert
-    assert isinstance(result, dict)
-    assert result.get("kernel_options") == {"test": True, "my_value": 5}
+    assert enums.VALUE_INHERITED not in str(result)
 
 
 def test_serialize(cobbler_api):

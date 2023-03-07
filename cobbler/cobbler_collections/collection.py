@@ -11,7 +11,7 @@ import time
 import os
 import uuid
 from threading import Lock
-from typing import List, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from cobbler import utils
 from cobbler.items import (
@@ -29,22 +29,27 @@ from cobbler.items import (
 
 from cobbler.cexceptions import CX
 
+if TYPE_CHECKING:
+    from cobbler.api import CobblerAPI
+    from cobbler.cobbler_collections.manager import CollectionManager
+    from cobbler.actions.sync import CobblerSync
+
 
 class Collection:
     """
     Base class for any serializable list of things.
     """
 
-    def __init__(self, collection_mgr):
+    def __init__(self, collection_mgr: "CollectionManager"):
         """
         Constructor.
 
         :param collection_mgr: The collection manager to resolve all information with.
         """
         self.collection_mgr = collection_mgr
-        self.listing = {}
+        self.listing: Dict[str, item_base.Item] = {}
         self.api = self.collection_mgr.api
-        self.lite_sync = None
+        self.lite_sync: Optional["CobblerSync"] = None
         self.lock = Lock()
         self.logger = logging.getLogger()
 
@@ -52,16 +57,18 @@ class Collection:
         """
         Iterator for the collection. Allows list comprehensions, etc.
         """
-        for a in list(self.listing.values()):
-            yield a
+        for obj in list(self.listing.values()):
+            yield obj
 
-    def __len__(self):
+    def __len__(self) -> int:
         """
         Returns size of the collection.
         """
         return len(list(self.listing.values()))
 
-    def factory_produce(self, api, seed_data):
+    def factory_produce(
+        self, api: "CobblerAPI", seed_data: Dict[str, Any]
+    ) -> item_base.Item:
         """
         Must override in subclass. Factory_produce returns an Item object from dict.
 
@@ -77,7 +84,7 @@ class Collection:
         with_sync: bool = True,
         with_triggers: bool = True,
         recursive: bool = False,
-    ):
+    ) -> None:
         """
         Remove an item from collection. This method must be overridden in any subclass.
 
@@ -92,17 +99,21 @@ class Collection:
             "Please implement this in a child class of this class."
         )
 
-    def get(self, name: str):
+    def get(self, name: str) -> Optional[item_base.Item]:
         """
         Return object with name in the collection
 
         :param name: The name of the object to retrieve from the collection.
         :return: The object if it exists. Otherwise None.
         """
-        return self.listing.get(name.lower(), None)
+        return self.listing.get(name, None)
 
     def find(
-        self, name: str = "", return_list: bool = False, no_errors=False, **kargs: dict
+        self,
+        name: str = "",
+        return_list: bool = False,
+        no_errors: bool = False,
+        **kargs: Any,
     ) -> Union[List[item_base.Item], item_base.Item, None]:
         """
         Return first object in the collection that matches all item='value' pairs passed, else return None if no objects
@@ -131,24 +142,20 @@ class Collection:
         # performance: if the only key is name we can skip the whole loop
         if len(kargs) == 1 and "name" in kargs and not return_list:
             try:
-                return self.listing.get(kargs["name"].lower(), None)
-            except:
+                return self.listing.get(kargs["name"], None)
+            except Exception:
                 return self.listing.get(kargs["name"], None)
 
-        self.lock.acquire()
-        try:
-            for (name, obj) in list(self.listing.items()):
+        with self.lock:
+            for (_, obj) in list(self.listing.items()):
                 if obj.find_match(kargs, no_errors=no_errors):
                     matches.append(obj)
-        finally:
-            self.lock.release()
 
         if not return_list:
             if len(matches) == 0:
                 return None
             return matches[0]
-        else:
-            return matches
+        return matches
 
     SEARCH_REKEY = {
         "kopts": "kernel_options",
@@ -172,7 +179,7 @@ class Collection:
         "boot_loader": "boot_loaders",
     }
 
-    def __rekey(self, _dict: dict) -> dict:
+    def __rekey(self, _dict: Dict[str, Any]) -> Dict[str, Any]:
         """
         Find calls from the command line ("cobbler system find") don't always match with the keys from the datastructs
         and this makes them both line up without breaking compatibility with either. Thankfully we don't have a LOT to
@@ -181,16 +188,16 @@ class Collection:
         :param _dict: The dict which should be remapped.
         :return: The dict which can now be understood by the cli.
         """
-        new_dict = {}
-        for x in list(_dict.keys()):
-            if x in self.SEARCH_REKEY:
-                newkey = self.SEARCH_REKEY[x]
-                new_dict[newkey] = _dict[x]
+        new_dict: Dict[str, Any] = {}
+        for key in _dict.keys():
+            if key in self.SEARCH_REKEY:
+                newkey = self.SEARCH_REKEY[key]
+                new_dict[newkey] = _dict[key]
             else:
-                new_dict[x] = _dict[x]
+                new_dict[key] = _dict[key]
         return new_dict
 
-    def to_list(self) -> list:
+    def to_list(self) -> List[item_base.Item]:
         """
         Serialize the collection
 
@@ -198,7 +205,7 @@ class Collection:
         """
         return [x.to_dict() for x in list(self.listing.values())]
 
-    def from_list(self, _list: list):
+    def from_list(self, _list: List[Dict[str, Any]]):
         """
         Create all collection object items from ``_list``.
 
@@ -207,10 +214,16 @@ class Collection:
         if _list is None:
             return
         for item_dict in _list:
-            item = self.factory_produce(self.api, item_dict)
-            self.add(item)
+            try:
+                item = self.factory_produce(self.api, item_dict)
+                self.add(item)
+            except Exception as exc:
+                self.logger.error(
+                    "Error while loading a collection: %s. Skipping this collection!",
+                    exc,
+                )
 
-    def copy(self, ref, newname):
+    def copy(self, ref: item_base.Item, newname: str):
         """
         Copy an object with a new name into the same collection.
 
@@ -241,7 +254,7 @@ class Collection:
     def rename(
         self,
         ref: item_base.Item,
-        newname,
+        newname: str,
         with_sync: bool = True,
         with_triggers: bool = True,
     ):
@@ -259,34 +272,36 @@ class Collection:
 
         # Save the old name
         oldname = ref.name
-        # Reserve the new name
-        self.listing[newname] = None
-        # Delete the old item
-        self.collection_mgr.serialize_delete_one_item(ref)
-        self.listing.pop(oldname)
-        # Change the name of the object
-        ref.name = newname
-        # Save just this item
-        self.collection_mgr.serialize_one_item(ref)
-        self.listing[newname] = ref
+        with self.lock:
+            # Delete the old item
+            self.collection_mgr.serialize_delete_one_item(ref)
+            self.listing.pop(oldname)
+            # Change the name of the object
+            ref.name = newname
+            # Save just this item
+            self.collection_mgr.serialize_one_item(ref)
+            self.listing[newname] = ref
 
-        # for mgmt classes, update all objects that use it
-        if ref.COLLECTION_TYPE == "mgmtclass":
-            for what in ["distro", "profile", "system"]:
-                items = self.api.find_items(what, {"mgmt_classes": oldname})
-                for item in items:
-                    for i in range(0, len(item.mgmt_classes)):
-                        if item.mgmt_classes[i] == oldname:
-                            item.mgmt_classes[i] = newname
-                    self.api.add_item(what, item, save=True)
-
-        # for menus, update all objects that use it
-        if ref.COLLECTION_TYPE == "menu":
-            for what in ["profile", "image"]:
-                items = self.api.find_items(what, {"menu": oldname})
-                for item in items:
-                    item.menu = newname
-                    self.api.add_item(what, item, save=True)
+        for dep_type in item_base.Item.TYPE_DEPENDENCIES[ref.COLLECTION_TYPE]:
+            items = self.api.find_items(dep_type[0], {dep_type[1]: oldname})
+            for item in items:
+                attr = getattr(item, "_" + dep_type[1])
+                if isinstance(attr, (str, item_base.Item)):
+                    setattr(item, dep_type[1], newname)
+                elif isinstance(attr, list):
+                    for i, attr_val in enumerate(attr):
+                        if attr_val == oldname:
+                            attr[i] = newname
+                else:
+                    raise CX(
+                        f'Internal error, unknown attribute type {type(attr)} for "{item.name}"!'
+                    )
+                self.api.get_items(item.COLLECTION_TYPE).add(
+                    item,
+                    save=True,
+                    with_sync=with_sync,
+                    with_triggers=with_triggers,
+                )
 
         # for a repo, rename the mirror directory
         if ref.COLLECTION_TYPE == "repo":
@@ -315,49 +330,15 @@ class Collection:
 
                 # update any reference to this path ...
                 distros = self.api.distros()
-                for d in distros:
-                    if d.kernel.find(path) == 0:
-                        d.kernel = d.kernel.replace(path, newpath)
-                        d.initrd = d.initrd.replace(path, newpath)
-                        self.collection_mgr.serialize_one_item(d)
-
-        if ref.COLLECTION_TYPE in ("profile", "system"):
-            if ref.parent is not None:
-                ref.parent.children.remove(oldname)
-
-        # Now descend to any direct ancestors and point them at the new object allowing the original object to be
-        # removed without orphanage. Direct ancestors will either be profiles or systems. Note that we do have to
-        # care as setting the parent is only really meaningful for subprofiles. We ideally want a more generic parent
-        # setter.
-        kids = ref.get_children()
-        for k in kids:
-            if self.api.find_profile(name=k) is not None:
-                k = self.api.find_profile(name=k)
-                if ref.COLLECTION_TYPE == "distro":
-                    k.distro = newname
-                else:
-                    k.parent = newname
-                self.api.profiles().add(
-                    k, save=True, with_sync=with_sync, with_triggers=with_triggers
-                )
-            elif self.api.find_menu(name=k) is not None:
-                k = self.api.find_menu(name=k)
-                k.parent = newname
-                self.api.menus().add(
-                    k, save=True, with_sync=with_sync, with_triggers=with_triggers
-                )
-            elif self.api.find_system(name=k) is not None:
-                k = self.api.find_system(name=k)
-                k.profile = newname
-                self.api.systems().add(
-                    k, save=True, with_sync=with_sync, with_triggers=with_triggers
-                )
-            else:
-                raise CX('Internal error, unknown child type for child "%s"!' % k)
+                for distro_obj in distros:
+                    if distro_obj.kernel.find(path) == 0:
+                        distro_obj.kernel = distro_obj.kernel.replace(path, newpath)
+                        distro_obj.initrd = distro_obj.initrd.replace(path, newpath)
+                        self.collection_mgr.serialize_one_item(distro_obj)
 
     def add(
         self,
-        ref,
+        ref: item_base.Item,
         save: bool = False,
         with_copy: bool = False,
         with_triggers: bool = True,
@@ -422,21 +403,11 @@ class Collection:
             utils.run_triggers(
                 self.api,
                 ref,
-                "/var/lib/cobbler/triggers/add/%s/pre/*" % self.collection_type(),
+                f"/var/lib/cobbler/triggers/add/{self.collection_type()}/pre/*",
             )
 
-        self.lock.acquire()
-        try:
-            self.listing[ref.name.lower()] = ref
-        finally:
-            self.lock.release()
-
-        # update children cache in parent object in case it is not in there already
-        if ref.parent and ref.name not in ref.parent.children:
-            ref.parent.children.append(ref.name)
-            self.logger.debug(
-                'Added child "%s" to parent "%s"', ref.name, ref.parent.name
-            )
+        with self.lock:
+            self.listing[ref.name] = ref
 
         # perform filesystem operations
         if save:
@@ -456,8 +427,15 @@ class Collection:
                     # we don't need openvz containers to be network bootable
                     if ref.virt_type == "openvz":
                         ref.enable_menu = False
-                    self.lite_sync.add_single_profile(ref.name)
-                    self.api.sync_systems(systems=ref.get_children())
+                    self.lite_sync.add_single_profile(ref)
+                    self.api.sync_systems(
+                        systems=self.find(
+                            "system",
+                            return_list=True,
+                            no_errors=False,
+                            **{"profile": ref.name},
+                        )
+                    )
                 elif isinstance(ref, distro.Distro):
                     self.lite_sync.add_single_distro(ref.name)
                 elif isinstance(ref, image.Image):
@@ -473,7 +451,7 @@ class Collection:
                 elif isinstance(ref, menu.Menu):
                     pass
                 else:
-                    print("Internal error. Object type not recognized: %s" % type(ref))
+                    print(f"Internal error. Object type not recognized: {type(ref)}")
             if not with_sync and quick_pxe_update:
                 if isinstance(ref, system.System):
                     self.lite_sync.update_system_netboot_status(ref.name)
@@ -486,7 +464,7 @@ class Collection:
                 utils.run_triggers(
                     self.api,
                     ref,
-                    "/var/lib/cobbler/triggers/add/%s/post/*" % self.collection_type(),
+                    f"/var/lib/cobbler/triggers/add/{self.collection_type()}/post/*",
                     [],
                 )
 
@@ -501,12 +479,11 @@ class Collection:
         values = list(self.listing.values())[:]  # copy the values
         values.sort()  # sort the copy (2.3 fix)
         results = []
-        for i, v in enumerate(values):
-            results.append(v.to_string())
+        for _, value in enumerate(values):
+            results.append(value.to_string())
         if len(values) > 0:
             return "\n\n".join(results)
-        else:
-            return "No objects found"
+        return "No objects found"
 
     @staticmethod
     def collection_type() -> str:

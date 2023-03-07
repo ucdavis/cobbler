@@ -51,22 +51,20 @@ class Distros(collection.Collection):
         :raises CX: In case any subitem (profiles or systems) would be orphaned. If the option ``recursive`` is set then
                     the orphaned items would be removed automatically.
         """
-        name = name.lower()
-
         obj = self.find(name=name)
 
         if obj is None:
-            raise CX("cannot delete an object that does not exist: %s" % name)
+            raise CX(f"cannot delete an object that does not exist: {name}")
 
         # first see if any Groups use this distro
         if not recursive:
             for profile in self.api.profiles():
-                if profile.distro and profile.distro.name.lower() == name:
-                    raise CX("removal would orphan profile: %s" % profile.name)
+                if profile.distro and profile.distro.name == name:
+                    raise CX(f"removal would orphan profile: {profile.name}")
 
         kernel = obj.kernel
         if recursive:
-            kids = obj.get_children()
+            kids = self.api.find_items("profile", {"distro": obj.name})
             for k in kids:
                 self.api.remove_profile(
                     k,
@@ -83,11 +81,8 @@ class Distros(collection.Collection):
             if with_sync:
                 lite_sync = self.api.get_sync()
                 lite_sync.remove_single_distro(name)
-        self.lock.acquire()
-        try:
+        with self.lock:
             del self.listing[name]
-        finally:
-            self.lock.release()
 
         self.collection_mgr.serialize_delete(self, obj)
 
@@ -122,8 +117,8 @@ class Distros(collection.Collection):
             # nothing else is also using this storage.
             found = False
             distros = self.api.distros()
-            for d in distros:
-                if d.kernel.find(path) != -1:
+            for dist in distros:
+                if dist.kernel.find(path) != -1:
                     found = True
             if not found:
                 filesystem_helpers.rmtree(path)

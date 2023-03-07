@@ -13,14 +13,10 @@
 # published by the Open Source Initiative.
 #
 # Supported/tested build targets:
-# - Fedora: 30, 31, Rawhide
-# - CentOS + EPEL: 7, 8
+# - Fedora: 37
+# - CentOS + EPEL: 8
 # - SLE: 15sp1
-# - openSUSE: Leap 15.1, Tumbleweed
-# - Debian: 10
-# - Ubuntu: 18.04
-#
-# If it doesn't build on the Open Build Service (OBS) it's a bug.
+# - openSUSE: Leap 15.4, Tumbleweed
 #
 
 # Force bash instead of Debian dash
@@ -68,7 +64,6 @@
 
 %define apache_dir /srv/www
 %define apache_webconfigdir /etc/apache2/vhosts.d
-%define apache_mod_wsgi apache2-mod_wsgi-python%{python3_pkgversion}
 %define tftpboot_dir /srv/tftpboot
 
 %define tftpsrv_pkg tftp
@@ -88,28 +83,6 @@
 # endif SUSE
 %endif
 
-# UBUNTU
-%if 0%{?debian} || 0%{?ubuntu}
-%define apache_user www-data
-%define apache_group www-data
-
-%define apache_webconfigdir /etc/apache2/conf-available
-%define apache_mod_wsgi libapache2-mod-wsgi-py%{python3_pkgversion}
-
-%define tftpsrv_pkg tftpd-hpa
-%define createrepo_pkg createrepo
-%define grub2_x64_efi_pkg grub-efi-amd64
-%define grub2_ia32_efi_pkg grub-efi-ia32
-%define system_release_pkg base-files
-
-# Debian 11 moved to the C implementation of createrepo
-%if 0%{?debian} == 11
-%define createrepo_pkg createrepo-c
-%endif
-
-#endif UBUNTU
-%endif
-
 #FEDORA
 %if 0%{?fedora} || 0%{?rhel}
 %define apache_user apache
@@ -119,7 +92,6 @@
 %define apache_webconfigdir /etc/httpd/conf.d
 
 %define apache_pkg httpd
-%define apache_mod_wsgi python%{python3_pkgversion}-mod_wsgi
 %define tftpsrv_pkg tftp-server
 %define grub2_x64_efi_pkg grub2-efi-x64
 %define grub2_ia32_efi_pkg grub2-efi-ia32
@@ -144,22 +116,12 @@
 # To ensure correct byte compilation
 %global __python %{__python3}
 
-%if "%{_vendor}" == "debbuild"
-%global devsuffix dev
-%else
-%global devsuffix devel
-%endif
-
 Name:           cobbler
 Version:        3.4.0
 Release:        1%{?dist}
 Summary:        Boot server configurator
 URL:            https://cobbler.github.io/
 
-%if "%{_vendor}" == "debbuild"
-Packager:       Cobbler Developers <cobbler@lists.fedorahosted.org>
-Group:          admin
-%endif
 %if 0%{?suse_version}
 Group:          Productivity/Networking/Boot/Servers
 %else
@@ -172,14 +134,9 @@ BuildArch:      noarch
 
 BuildRequires:  git-core
 BuildRequires:  %{system_release_pkg}
-BuildRequires:  python%{python3_pkgversion}-%{devsuffix}
+BuildRequires:  python%{python3_pkgversion}-devel
 %if 0%{?suse_version}
 BuildRequires:  python-rpm-macros
-%endif
-%if "%{_vendor}" == "debbuild"
-BuildRequires:  python3-deb-macros
-BuildRequires:  apache2-deb-macros
-
 %endif
 BuildRequires:  %{py3_module_coverage}
 BuildRequires:  python%{python3_pkgversion}-distro
@@ -205,12 +162,6 @@ BuildRequires:  systemd
 %if 0%{?fedora} >= 30 || 0%{?rhel} >= 9 || 0%{?suse_version}
 BuildRequires:  systemd-rpm-macros
 %endif
-%if "%{_vendor}" == "debbuild"
-BuildRequires:  systemd-deb-macros
-Requires:       systemd-sysv
-Requires(post): python3-minimal
-Requires(preun): python3-minimal
-%endif
 Requires(post): systemd
 Requires(preun): systemd
 Requires(postun): systemd
@@ -226,12 +177,12 @@ Requires:       xorriso
 %if ! (%{defined python_enable_dependency_generator} || %{defined python_disable_dependency_generator})
 Requires:       %{py3_module_cheetah}
 Requires:       %{py3_module_dns}
-Requires:       %{apache_mod_wsgi}
 Requires:       python%{python3_pkgversion}-netaddr
 Requires:       %{py3_module_pyyaml}
 Requires:       python%{python3_pkgversion}-requests
 Requires:       python%{python3_pkgversion}-distro
 Requires:       python%{python3_pkgversion}-schema
+Requires:       python%{python3_pkgversion}-gunicorn
 Requires:       %{py3_module_file}
 %if 0%{?suse_version}
 Recommends:     python%{python3_pkgversion}-ldap
@@ -256,11 +207,7 @@ Recommends:     logrotate
 Recommends:     python%{python3_pkgversion}-librepo
 %endif
 # https://github.com/cobbler/cobbler/issues/1685
-%if "%{_vendor}" == "debbuild"
-Requires:       init-system-helpers
-%else
 Requires:       /sbin/service
-%endif
 # No point in having this split out...
 Obsoletes:      cobbler-nsupdate < 3.0.99
 Provides:       cobbler-nsupdate = %{version}-%{release}
@@ -278,14 +225,16 @@ Requires:       cobbler = %{version}-%{release}
 %description tests
 Unit test files from the Cobbler project
 
+%package tests-containers
+Summary:        Dockerfiles and scripts to setup testing containers
+Requires:       cobbler = %{version}-%{release}
+
+%description tests-containers
+Dockerfiles and scripts to setup testing containers
+
 
 %prep
 %setup
-
-%if 0%{?suse_version}
-# Set tftpboot location correctly for SUSE distributions
-sed -e "s|/var/lib/tftpboot|%{tftpboot_dir}|g" -i config/cobbler/settings.yaml
-%endif
 
 %build
 . distro_build_configs.sh
@@ -310,7 +259,8 @@ sed -e "s|/var/lib/tftpboot|%{tftpboot_dir}|g" -i config/cobbler/settings.yaml
 %py3_install
 
 # cobbler
-rm %{buildroot}%{_sysconfdir}/cobbler/cobbler.conf
+rm -r %{buildroot}%{_sysconfdir}/cobbler/apache
+rm -r %{buildroot}%{_sysconfdir}/cobbler/nginx
 
 mkdir -p %{buildroot}%{_sysconfdir}/logrotate.d
 mv %{buildroot}%{_sysconfdir}/cobbler/cobblerd_rotate %{buildroot}%{_sysconfdir}/logrotate.d/cobblerd
@@ -318,6 +268,7 @@ mv %{buildroot}%{_sysconfdir}/cobbler/cobblerd_rotate %{buildroot}%{_sysconfdir}
 # systemd
 mkdir -p %{buildroot}%{_unitdir}
 mv %{buildroot}%{_sysconfdir}/cobbler/cobblerd.service %{buildroot}%{_unitdir}
+mv %{buildroot}%{_sysconfdir}/cobbler/cobblerd-gunicorn.service %{buildroot}%{_unitdir}
 %if 0%{?suse_version}
 mkdir -p %{buildroot}%{_sbindir}
 ln -sf service %{buildroot}%{_sbindir}/rccobblerd
@@ -325,11 +276,7 @@ ln -sf service %{buildroot}%{_sbindir}/rccobblerd
 
 
 %pre
-%if "%{_vendor}" == "debbuild"
-if [ "$1" = "upgrade" ]; then
-%else
 if [ $1 -ge 2 ]; then
-%endif
     # package upgrade: backup configuration
     DATE=$(date "+%%Y%%m%%d-%%H%%M%%S")
     if [ ! -d "%{_sharedstatedir}/cobbler/backup/upgrade-${DATE}" ]; then
@@ -345,27 +292,9 @@ if [ $1 -ge 2 ]; then
     fi
 fi
 
-%if "%{_vendor}" == "debbuild"
-%post
-%{py3_bytecompile_post %{name}}
-%{systemd_post cobblerd.service}
-%{apache2_module_post proxy_http}
-# Fixup permission for world readable settings files
-chmod 640 %{_sysconfdir}/cobbler/settings.yaml
-chmod 640 %{_sysconfdir}/cobbler/users.conf
-chmod 640 %{_sysconfdir}/cobbler/users.digest
-chgrp %{apache_group} %{_sysconfdir}/cobbler/settings.yaml
-
-%preun
-%{py3_bytecompile_preun %{name}}
-%{systemd_preun cobblerd.service}
-
-%postun
-%{systemd_postun_with_restart cobblerd.service}
-
-%else
 %post
 %systemd_post cobblerd.service
+%systemd_post cobblerd-gunicorn.service
 # Fixup permission for world readable settings files
 chmod 640 %{_sysconfdir}/cobbler/settings.yaml
 chmod 640 %{_sysconfdir}/cobbler/users.conf
@@ -374,10 +303,11 @@ chgrp %{apache_group} %{_sysconfdir}/cobbler/settings.yaml
 
 %preun
 %systemd_preun cobblerd.service
+%systemd_preun cobblerd-gunicorn.service
 
 %postun
 %systemd_postun_with_restart cobblerd.service
-%endif
+%systemd_postun_with_restart cobblerd-gunicorn.service
 
 %files
 %license COPYING
@@ -412,17 +342,9 @@ chgrp %{apache_group} %{_sysconfdir}/cobbler/settings.yaml
 %config(noreplace) %{_sysconfdir}/cobbler/rsync.exclude
 %config(noreplace) %{_sysconfdir}/cobbler/rsync.template
 %config(noreplace) %{_sysconfdir}/cobbler/secondary.template
-%if "%{_vendor}" == "debbuild"
-# Work around broken attr support
-# Cf. https://github.com/debbuild/debbuild/issues/160
-%attr(640, root, root) %config(noreplace) %{_sysconfdir}/cobbler/settings.yaml
-%attr(640, root, root) %config(noreplace) %{_sysconfdir}/cobbler/users.conf
-%attr(640, root, root) %config(noreplace) %{_sysconfdir}/cobbler/users.digest
-%else
 %attr(640, root, %{apache_group}) %config(noreplace) %{_sysconfdir}/cobbler/settings.yaml
 %attr(640, root, root) %config(noreplace) %{_sysconfdir}/cobbler/users.conf
 %attr(640, root, root) %config(noreplace) %{_sysconfdir}/cobbler/users.digest
-%endif
 %config(noreplace) %{_sysconfdir}/cobbler/version
 %config(noreplace) %{_sysconfdir}/cobbler/zone.template
 %dir %{_sysconfdir}/cobbler/zone_templates
@@ -446,16 +368,20 @@ chgrp %{apache_group} %{_sysconfdir}/cobbler/settings.yaml
 %{python3_sitelib}/cobbler/
 %{python3_sitelib}/cobbler-*
 %{_unitdir}/cobblerd.service
+%{_unitdir}/cobblerd-gunicorn.service
 %if 0%{?suse_version}
 %{_sbindir}/rccobblerd
 %endif
-%{apache_dir}/cobbler
 %{_sharedstatedir}/cobbler
 %{_localstatedir}/log/cobbler
 
 %files tests
 %dir %{_datadir}/cobbler/tests
 %{_datadir}/cobbler/tests/*
+
+%files tests-containers
+%dir %{_datadir}/cobbler/docker
+%{_datadir}/cobbler/docker/*
 
 %changelog
 * Thu Dec 19 2019 Neal Gompa <ngompa13@gmail.com>

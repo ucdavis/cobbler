@@ -7,11 +7,12 @@ Repository of the Cobbler object model
 # SPDX-FileCopyrightText: Michael DeHaan <michael.dehaan AT gmail>
 
 import weakref
-from typing import Union, Dict, Any
+from typing import TYPE_CHECKING, Union, Dict, Any
 
 from cobbler.cexceptions import CX
 from cobbler import serializer
 from cobbler import validate
+from cobbler.settings import Settings
 from cobbler.cobbler_collections.distros import Distros
 from cobbler.cobbler_collections.files import Files
 from cobbler.cobbler_collections.images import Images
@@ -23,6 +24,10 @@ from cobbler.cobbler_collections.systems import Systems
 from cobbler.cobbler_collections.menus import Menus
 
 
+if TYPE_CHECKING:
+    from cobbler.api import CobblerAPI
+
+
 class CollectionManager:
     """
     Manages a definitive copy of all data cobbler_collections with weakrefs pointing back into the class so they can
@@ -32,7 +37,7 @@ class CollectionManager:
     has_loaded = False
     __shared_state: Dict[str, Any] = {}
 
-    def __init__(self, api):
+    def __init__(self, api: "CobblerAPI"):
         """
         Constructor which loads all content if this action was not performed before.
         """
@@ -40,7 +45,7 @@ class CollectionManager:
         if not CollectionManager.has_loaded:
             self.__load(api)
 
-    def __load(self, api):
+    def __load(self, api: "CobblerAPI"):
         """
         Load all collections from the disk into Cobbler.
 
@@ -180,6 +185,8 @@ class CollectionManager:
 
         :raises CX: if there is an error in deserialization
         """
+        old_cache_enabled = self.api.settings().cache_enabled
+        self.api.settings().cache_enabled = False
         for collection in (
             self._menus,
             self._distros,
@@ -193,16 +200,26 @@ class CollectionManager:
         ):
             try:
                 self.__serializer.deserialize(collection)
-            except Exception as e:
+            except Exception as error:
                 raise CX(
-                    "serializer: error loading collection %s: %s. Check your settings!"
-                    % (collection.collection_type(), e)
-                ) from e
+                    f"serializer: error loading collection {collection.collection_type()}: {error}."
+                    f"Check your settings!"
+                ) from error
+        self.api.settings().cache_enabled = old_cache_enabled
 
     def get_items(
         self, collection_type: str
     ) -> Union[
-        Distros, Profiles, Systems, Repos, Images, Mgmtclasses, Packages, Files, Menus
+        Distros,
+        Profiles,
+        Systems,
+        Repos,
+        Images,
+        Mgmtclasses,
+        Packages,
+        Files,
+        Menus,
+        Settings,
     ]:
         """
         Get a full collection of a single type.
@@ -224,6 +241,7 @@ class CollectionManager:
             Packages,
             Files,
             Menus,
+            Settings,
         ]
         if validate.validate_obj_type(collection_type) and hasattr(
             self, f"_{collection_type}s"
@@ -235,6 +253,6 @@ class CollectionManager:
             result = self.api.settings()
         else:
             raise CX(
-                'internal error, collection name "%s" not supported' % collection_type
+                f'internal error, collection name "{collection_type}" not supported'
             )
         return result

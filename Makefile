@@ -82,8 +82,8 @@ release: clean qa authors sdist ## Creates the full release.
 test-centos8: ## Executes the testscript for testing cobbler in a docker container on CentOS8.
 	./docker/rpms/build-and-install-rpms.sh el8 docker/rpms/CentOS_8/CentOS8.dockerfile
 
-test-fedora34: ## Executes the testscript for testing cobbler in a docker container on Fedora 33.
-	./docker/rpms/build-and-install-rpms.sh fc34 docker/rpms/Fedora_34/Fedora34.dockerfile
+test-fedora37: ## Executes the testscript for testing cobbler in a docker container on Fedora 37.
+	./docker/rpms/build-and-install-rpms.sh fc37 docker/rpms/Fedora_37/Fedora37.dockerfile
 
 test-debian10: ## Executes the testscript for testing cobbler in a docker container on Debian 10.
 	./docker/debs/build-and-install-debs.sh deb10 docker/debs/Debian_10/Debian10.dockerfile
@@ -104,6 +104,7 @@ build: ## Runs the Python Build.
 install: build ## Runs the build target and then installs via setup.py
 	# Debian/Ubuntu requires an additional parameter in setup.py
 	@source distro_build_configs.sh; \
+	git config --add safe.directory /code; \
 	${PYTHON} setup.py install --root $(DESTDIR) -f
 
 devinstall: ## This deletes the /usr/share/cobbler directory and then runs the targets savestate, install and restorestate.
@@ -147,15 +148,12 @@ rpms: release ## Runs the target release and then creates via rpmbuild the rpms 
 	-ba cobbler.spec
 
 # Only build a binary package
-debs: release ## Runs the target release and then creates via debbuild the debs in a directory called deb-build.
-	mkdir -p deb-build
-	mkdir -p deb-build/{BUILD,BUILDROOT,DEBS,SDEBS,SOURCES}
-	cp dist/*.gz deb-build/
-	debbuild --define "_topdir %(pwd)/deb-build" \
-	--define "_builddir %{_topdir}" \
-	--define "_specdir %{_topdir}" \
-	--define "_sourcedir  %{_topdir}" \
-	-vv -bb cobbler.spec
+debs: authors ## Creates native debs in a directory called deb-build. The release target is called during the build process.
+	@source distro_build_configs.sh; \
+    debuild -us -uc
+	@mkdir -p deb-build; \
+    cp ../cobbler_* deb-build/; \
+    cp ../cobbler-tests* deb-build/
 
 eraseconfig: ## Deletes the cobbler data jsons which are created when using the file provider.
 	-rm /var/lib/cobbler/cobbler_collections/distros/*

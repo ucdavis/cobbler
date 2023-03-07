@@ -1,6 +1,7 @@
 import pytest
 
 from cobbler import enums
+from cobbler.items.profile import Profile
 from cobbler.items.system import NetworkInterface, System
 from cobbler.cexceptions import CX
 from tests.conftest import does_not_raise
@@ -25,6 +26,65 @@ def test_make_clone(cobbler_api):
 
     # Assert
     assert result != system
+
+
+def test_to_dict(cobbler_api):
+    # Arrange
+    titem = System(cobbler_api)
+
+    # Act
+    result = titem.to_dict()
+
+    # Assert
+    assert isinstance(result, dict)
+    assert result.get("autoinstall") == enums.VALUE_INHERITED
+
+
+def test_to_dict_resolved_profile(cobbler_api, create_distro):
+    # Arrange
+    test_distro = create_distro()
+    test_distro.kernel_options = {"test": True}
+    cobbler_api.add_distro(test_distro)
+    titem = Profile(cobbler_api)
+    titem.name = "to_dict_resolved_profile"
+    titem.distro = test_distro.name
+    titem.kernel_options = {"my_value": 5}
+    cobbler_api.add_profile(titem)
+    system = System(cobbler_api)
+    system.name = "to_dict_resolved_system_profile"
+    system.profile = titem.name
+    system.kernel_options = {"my_value": 10}
+    cobbler_api.add_system(system)
+
+    # Act
+    result = system.to_dict(resolved=True)
+
+    # Assert
+    assert isinstance(result, dict)
+    assert result.get("kernel_options") == {"test": True, "my_value": 10}
+    assert result.get("autoinstall") == "default.ks"
+    assert enums.VALUE_INHERITED not in str(result)
+
+
+def test_to_dict_resolved_image(cobbler_api, create_image):
+    # Arrange
+    test_image = create_image()
+    test_image.kernel_options = {"test": True}
+    cobbler_api.add_image(test_image)
+    system = System(cobbler_api)
+    system.name = "to_dict_resolved_system_image"
+    system.image = test_image.name
+    system.kernel_options = {"my_value": 5}
+    cobbler_api.add_system(system)
+
+    # Act
+    result = system.to_dict(resolved=True)
+    print(str(result))
+
+    # Assert
+    assert isinstance(result, dict)
+    assert result.get("kernel_options") == {"test": True, "my_value": 5}
+    assert enums.VALUE_INHERITED not in str(result)
 
 
 # Properties Tests
@@ -666,6 +726,47 @@ def test_from_dict_with_network_interface(cobbler_api):
 
     # Assert
     assert "default" in system.interfaces
+
+
+@pytest.mark.parametrize(
+    "value,expected_exception,expected_result",
+    [
+        ("foobar_not_existing", pytest.raises(ValueError), None),
+        ("", pytest.raises(ValueError), None),
+        ("na", does_not_raise(), enums.NetworkInterfaceType.NA),
+        ("bond", does_not_raise(), enums.NetworkInterfaceType.BOND),
+        ("bond_slave", does_not_raise(), enums.NetworkInterfaceType.BOND_SLAVE),
+        ("bridge", does_not_raise(), enums.NetworkInterfaceType.BRIDGE),
+        ("bridge_slave", does_not_raise(), enums.NetworkInterfaceType.BRIDGE_SLAVE),
+        (
+            "bonded_bridge_slave",
+            does_not_raise(),
+            enums.NetworkInterfaceType.BONDED_BRIDGE_SLAVE,
+        ),
+        ("bmc", does_not_raise(), enums.NetworkInterfaceType.BMC),
+        ("infiniband", does_not_raise(), enums.NetworkInterfaceType.INFINIBAND),
+        (0, does_not_raise(), enums.NetworkInterfaceType.NA),
+        (1, does_not_raise(), enums.NetworkInterfaceType.BOND),
+        (2, does_not_raise(), enums.NetworkInterfaceType.BOND_SLAVE),
+        (3, does_not_raise(), enums.NetworkInterfaceType.BRIDGE),
+        (4, does_not_raise(), enums.NetworkInterfaceType.BRIDGE_SLAVE),
+        (5, does_not_raise(), enums.NetworkInterfaceType.BONDED_BRIDGE_SLAVE),
+        (6, does_not_raise(), enums.NetworkInterfaceType.BMC),
+        (7, does_not_raise(), enums.NetworkInterfaceType.INFINIBAND),
+    ],
+)
+def test_network_interface_type(
+    cobbler_api, value, expected_exception, expected_result
+):
+    # Arrange
+    interface = NetworkInterface(cobbler_api)
+
+    # Act
+    with expected_exception:
+        interface.interface_type = value
+
+        # Assert
+        assert interface.interface_type == expected_result
 
 
 @pytest.mark.parametrize(

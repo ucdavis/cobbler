@@ -29,11 +29,16 @@ class Mgmtclass(item.Item):
         :param kwargs: The keyword arguments which should be passed additionally to the base Item class constructor.
         """
         super().__init__(api, *args, **kwargs)
+        # Prevent attempts to clear the to_dict cache before the object is initialized.
+        self._has_initialized = False
+
         self._is_definition = False
         self._params = {}
         self._class_name = ""
         self._files = []
         self._packages = []
+        if not self._has_initialized:
+            self._has_initialized = True
 
     #
     # override some base class methods first (item.Item)
@@ -125,8 +130,8 @@ class Mgmtclass(item.Item):
             self._params = input_converters.input_string_or_dict(
                 params, allow_multiples=True
             )
-        except TypeError as e:
-            raise TypeError("invalid value for params") from e
+        except TypeError as error:
+            raise TypeError("invalid value for params") from error
 
     @property
     def is_definition(self) -> bool:
@@ -172,7 +177,7 @@ class Mgmtclass(item.Item):
         """
         if not isinstance(name, str):
             raise TypeError("class name must be a string")
-        for x in name:
-            if not x.isalnum() and x not in ["_", "-", ".", ":", "+"]:
-                raise ValueError("invalid characters in class name: '%s'" % name)
+        for letter in name:
+            if not letter.isalnum() and letter not in ["_", "-", ".", ":", "+"]:
+                raise ValueError(f"invalid characters in class name: '{name}'")
         self._class_name = name

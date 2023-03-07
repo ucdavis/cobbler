@@ -538,7 +538,6 @@ if __name__ == "__main__":
         ],
         keywords=["pxe", "autoinstallation", "dhcp", "tftp", "provisioning"],
         install_requires=[
-            "mod_wsgi",
             "requests",
             "pyyaml",
             "netaddr",
@@ -549,10 +548,18 @@ if __name__ == "__main__":
             "dnspython",
             "file-magic",
             "schema",
+            "gunicorn",
         ],
         extras_require={
-            "lint": ["pyflakes", "pycodestyle"],
-            "test": ["pytest", "pytest-cov", "codecov", "pytest-mock"],
+            "lint": ["pyflakes", "pycodestyle", "pylint", "black", "mypy"],
+            "test": [
+                "pytest>6",
+                "pytest-cov",
+                "codecov",
+                "pytest-mock",
+                "pytest-benchmark",
+            ],
+            "docs": ["sphinx", "sphinx-rtd-theme", "sphinxcontrib-apidoc"],
         },
         packages=find_packages(exclude=["*tests*"]),
         scripts=[
@@ -576,6 +583,7 @@ if __name__ == "__main__":
         },
         configure_files=[
             "config/apache/cobbler.conf",
+            "config/nginx/cobbler.conf",
             "config/cobbler/settings.yaml",
             "config/service/cobblerd.service",
             "templates/etc/named.template",
@@ -596,10 +604,11 @@ if __name__ == "__main__":
             ("%s/loaders" % libpath, []),
             ("%s/misc" % libpath, glob("misc/*")),
             # Configuration
+            (f"{etcpath}/apache", ["build/config/apache/cobbler.conf"]),
+            (f"{etcpath}/nginx", ["build/config/nginx/cobbler.conf"]),
             (
                 "%s" % etcpath,
                 [
-                    "build/config/apache/cobbler.conf",
                     "build/config/service/cobblerd.service",
                     "build/config/cobbler/settings.yaml",
                 ],
@@ -614,6 +623,7 @@ if __name__ == "__main__":
                     "config/rotate/cobblerd_rotate",
                     "config/rsync/import_rsync_whitelist",
                     "config/rsync/rsync.exclude",
+                    "config/service/cobblerd-gunicorn.service",
                     "config/version",
                 ],
             ),
@@ -650,8 +660,6 @@ if __name__ == "__main__":
             ("%s/httpd/cobbler" % logpath, []),
             ("%s/cobbler/anamon" % logpath, []),
             ("%s/cobbler/tasks" % logpath, []),
-            # A script that isn't really data, wsgi script
-            ("%s/cobbler/svc/" % webroot, ["svc/services.py"]),
             # zone-specific templates directory
             ("%s/zone_templates" % etcpath, glob("templates/zone_templates/*")),
             # windows-specific templates directory
@@ -661,13 +669,175 @@ if __name__ == "__main__":
             ("%s/man1" % docpath, glob("build/sphinx/man/*.1")),
             ("%s/man5" % docpath, glob("build/sphinx/man/*.5")),
             ("%s/man8" % docpath, glob("build/sphinx/man/*.8")),
+            # tests
             ("%s/tests" % datadir, glob("tests/*.py")),
+            ("%s/tests/actions" % datadir, glob("tests/actions/*.py")),
+            (
+                "%s/tests/actions/buildiso" % datadir,
+                glob("tests/actions/buildiso/*.py"),
+            ),
+            ("%s/tests/api" % datadir, glob("tests/api/*.py")),
             ("%s/tests/cli" % datadir, glob("tests/cli/*.py")),
+            ("%s/tests/collections" % datadir, glob("tests/collections/*.py")),
+            ("%s/tests/items" % datadir, glob("tests/items/*.py")),
             ("%s/tests/modules" % datadir, glob("tests/modules/*.py")),
             (
                 "%s/tests/modules/authentication" % datadir,
                 glob("tests/modules/authentication/*.py"),
             ),
+            (
+                "%s/tests/modules/authorization" % datadir,
+                glob("tests/modules/authorization/*.py"),
+            ),
+            (
+                "%s/tests/modules/installation" % datadir,
+                glob("tests/modules/installation/*.py"),
+            ),
+            (
+                "%s/tests/modules/managers" % datadir,
+                glob("tests/modules/managers/*.py"),
+            ),
+            (
+                "%s/tests/modules/serializer" % datadir,
+                glob("tests/modules/serializer/*.py"),
+            ),
+            ("%s/tests/settings" % datadir, glob("tests/settings/*.py")),
+            (
+                "%s/tests/settings/migrations" % datadir,
+                glob("tests/settings/migrations/*.py"),
+            ),
+            ("%s/tests/special_cases" % datadir, glob("tests/special_cases/*.py")),
+            ("%s/tests/test_data" % datadir, glob("tests/test_data/*")),
+            ("%s/tests/test_data/V2_8_5" % datadir, glob("tests/test_data/V2_8_5/*")),
+            ("%s/tests/test_data/V3_0_0" % datadir, glob("tests/test_data/V3_0_0/*")),
+            (
+                "%s/tests/test_data/V3_0_0/settings.d" % datadir,
+                glob("tests/test_data/V3_0_0/settings.d/*"),
+            ),
+            ("%s/tests/test_data/V3_0_1" % datadir, glob("tests/test_data/V3_0_1/*")),
+            (
+                "%s/tests/test_data/V3_0_1/settings.d" % datadir,
+                glob("tests/test_data/V3_0_1/settings.d/*"),
+            ),
+            ("%s/tests/test_data/V3_1_0" % datadir, glob("tests/test_data/V3_1_0/*")),
+            (
+                "%s/tests/test_data/V3_1_0/settings.d" % datadir,
+                glob("tests/test_data/V3_1_0/settings.d/*"),
+            ),
+            ("%s/tests/test_data/V3_1_1" % datadir, glob("tests/test_data/V3_1_1/*")),
+            (
+                "%s/tests/test_data/V3_1_1/settings.d" % datadir,
+                glob("tests/test_data/V3_1_1/settings.d/*"),
+            ),
+            ("%s/tests/test_data/V3_1_2" % datadir, glob("tests/test_data/V3_1_2/*")),
+            (
+                "%s/tests/test_data/V3_1_2/settings.d" % datadir,
+                glob("tests/test_data/V3_1_2/settings.d/*"),
+            ),
+            ("%s/tests/test_data/V3_2_0" % datadir, glob("tests/test_data/V3_2_0/*")),
+            (
+                "%s/tests/test_data/V3_2_0/settings.d" % datadir,
+                glob("tests/test_data/V3_2_0/settings.d/*"),
+            ),
+            ("%s/tests/test_data/V3_2_1" % datadir, glob("tests/test_data/V3_2_1/*")),
+            (
+                "%s/tests/test_data/V3_2_1/settings.d" % datadir,
+                glob("tests/test_data/V3_2_1/settings.d/*"),
+            ),
+            ("%s/tests/test_data/V3_3_0" % datadir, glob("tests/test_data/V3_3_0/*")),
+            (
+                "%s/tests/test_data/V3_3_0/settings.d" % datadir,
+                glob("tests/test_data/V3_3_0/settings.d/*"),
+            ),
+            ("%s/tests/test_data/V3_3_1" % datadir, glob("tests/test_data/V3_3_1/*")),
+            (
+                "%s/tests/test_data/V3_3_1/settings.d" % datadir,
+                glob("tests/test_data/V3_3_1/settings.d/*"),
+            ),
+            ("%s/tests/test_data/V3_3_2" % datadir, glob("tests/test_data/V3_3_2/*")),
+            (
+                "%s/tests/test_data/V3_3_2/settings.d" % datadir,
+                glob("tests/test_data/V3_3_2/settings.d/*"),
+            ),
+            ("%s/tests/test_data/V3_3_3" % datadir, glob("tests/test_data/V3_3_3/*")),
+            (
+                "%s/tests/test_data/V3_3_3/settings.d" % datadir,
+                glob("tests/test_data/V3_3_3/settings.d/*"),
+            ),
             ("%s/tests/xmlrpcapi" % datadir, glob("tests/xmlrpcapi/*.py")),
+            ("%s/tests/test_data/V3_4_0" % datadir, glob("tests/test_data/V3_4_0/*")),
+            ("%s/tests/utils" % datadir, glob("tests/utils/*.py")),
+            (f"{datadir}/tests/performance", glob("tests/performance/*.py")),
+            # tests containers subpackage
+            ("%s/docker" % datadir, glob("docker/*")),
+            ("%s/docker/debs" % datadir, glob("docker/debs/*")),
+            ("%s/docker/debs/Debian_10" % datadir, glob("docker/debs/Debian_10/*")),
+            (
+                "%s/docker/debs/Debian_10/supervisord" % datadir,
+                glob("docker/debs/Debian_10/supervisord/*"),
+            ),
+            (
+                "%s/docker/debs/Debian_10/supervisord/conf.d" % datadir,
+                glob("docker/debs/Debian_10/supervisord/conf.d/*"),
+            ),
+            ("%s/docker/debs/Debian_11" % datadir, glob("docker/debs/Debian_11/*")),
+            (
+                "%s/docker/debs/Debian_11/supervisord" % datadir,
+                glob("docker/debs/Debian_11/supervisord/*"),
+            ),
+            (
+                "%s/docker/debs/Debian_11/supervisord/conf.d" % datadir,
+                glob("docker/debs/Debian_11/supervisord/conf.d/*"),
+            ),
+            ("%s/docker/develop" % datadir, glob("docker/develop/*")),
+            ("%s/docker/develop/openldap" % datadir, glob("docker/develop/openldap/*")),
+            ("%s/docker/develop/pam" % datadir, glob("docker/develop/pam/*")),
+            ("%s/docker/develop/scripts" % datadir, glob("docker/develop/scripts/*")),
+            (
+                "%s/docker/develop/supervisord" % datadir,
+                glob("docker/develop/supervisord/*"),
+            ),
+            (
+                "%s/docker/develop/supervisord/conf.d" % datadir,
+                glob("docker/develop/supervisord/conf.d/*"),
+            ),
+            ("%s/docker/rpms" % datadir, glob("docker/rpms/*")),
+            ("%s/docker/rpms/Fedora_34" % datadir, glob("docker/rpms/Fedora_34/*")),
+            (
+                "%s/docker/rpms/Fedora_34/supervisord" % datadir,
+                glob("docker/rpms/Fedora_34/supervisord/*"),
+            ),
+            (
+                "%s/docker/rpms/Fedora_34/supervisord/conf.d" % datadir,
+                glob("docker/rpms/Fedora_34/supervisord/conf.d/*"),
+            ),
+            (
+                "%s/docker/rpms/Rocky_Linux_8" % datadir,
+                glob("docker/rpms/Rocky_Linux_8/*"),
+            ),
+            (
+                "%s/docker/rpms/opensuse_leap" % datadir,
+                glob("docker/rpms/opensuse_leap/*"),
+            ),
+            (
+                "%s/docker/rpms/opensuse_leap/supervisord" % datadir,
+                glob("docker/rpms/opensuse_leap/supervisord/*"),
+            ),
+            (
+                "%s/docker/rpms/opensuse_leap/supervisord/conf.d" % datadir,
+                glob("docker/rpms/opensuse_leap/supervisord/conf.d/*"),
+            ),
+            (
+                "%s/docker/rpms/opensuse_tumbleweed" % datadir,
+                glob("docker/rpms/opensuse_tumbleweed/*"),
+            ),
+            (
+                "%s/docker/rpms/opensuse_tumbleweed/supervisord" % datadir,
+                glob("docker/rpms/opensuse_tumbleweed/supervisord/*"),
+            ),
+            (
+                "%s/docker/rpms/opensuse_tumbleweed/supervisord/conf.d" % datadir,
+                glob("docker/rpms/opensuse_tumbleweed/supervisord/conf.d/*"),
+            ),
         ],
     )

@@ -9,8 +9,8 @@ Post install trigger for Cobbler to send out a pretty email report that contains
 from builtins import str
 import smtplib
 from cobbler.cexceptions import CX
-import cobbler.templar as templar
-import cobbler.utils as utils
+from cobbler import templar
+from cobbler import utils
 
 
 def register() -> str:
@@ -73,7 +73,7 @@ def run(api, args) -> int:
     # use a custom from address or fall back to a reasonable default
     from_addr = settings.build_reporting_sender
     if from_addr == "":
-        from_addr = "cobbler@%s" % settings.server
+        from_addr = f"cobbler@{settings.server}"
 
     subject = settings.build_reporting_subject
     if subject == "":
@@ -88,14 +88,16 @@ def run(api, args) -> int:
     }
     metadata.update(target)
 
-    with open("/etc/cobbler/reporting/build_report_email.template") as input_template:
+    with open(
+        "/etc/cobbler/reporting/build_report_email.template", encoding="UTF-8"
+    ) as input_template:
         input_data = input_template.read()
 
         message = templar.Templar(api).render(input_data, metadata, None)
 
         sendmail = True
         for prefix in settings.build_reporting_ignorelist:
-            if prefix != "" and name.lower().startswith(prefix):
+            if prefix != "" and name.startswith(prefix):
                 sendmail = False
 
         if sendmail:

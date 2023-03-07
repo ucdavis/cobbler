@@ -80,8 +80,8 @@ def test_repo_walker(mocker, tmp_path):
 @pytest.mark.parametrize(
     "input_has_librepo,input_path_exists_side_effect,expected_exception,expected_result",
     [
-        (True, [True, False], does_not_raise(), "/usr/bin/dnf reposync"),
-        (True, [False, True], does_not_raise(), "/usr/bin/reposync"),
+        (True, [True, False], does_not_raise(), ["/usr/bin/dnf", "reposync"]),
+        (True, [False, True], does_not_raise(), ["/usr/bin/reposync"]),
         (True, [False, False], pytest.raises(cexceptions.CX), ""),
         (False, [False, True], pytest.raises(cexceptions.CX), ""),
     ],
@@ -191,7 +191,7 @@ def test_reposync_yum(
         reposync_object, "create_local_file", return_value="/create/local/file"
     )
     mocker.patch.object(
-        reposync_object, "reposync_cmd", return_value="/my/fake/dnf reposync"
+        reposync_object, "reposync_cmd", return_value=["/my/fake/dnf", "reposync"]
     )
     mocker.patch.object(reposync_object, "rflags", return_value="--fake-r-flakg")
     mocker.patch.object(
@@ -396,7 +396,7 @@ def test_reposync_rhn(mocker, reposync_object, repo):
     mocker.patch("cobbler.actions.reposync.repo_walker")
     mocker.patch.object(reposync_object, "create_local_file")
     mocker.patch.object(
-        reposync_object, "reposync_cmd", return_value="/my/fake/reposync"
+        reposync_object, "reposync_cmd", return_value=["/my/fake/reposync"]
     )
 
     # Act
@@ -409,7 +409,7 @@ def test_reposync_rhn(mocker, reposync_object, repo):
             "/my/fake/reposync",
             "--testflag",
             "--repo=testrepo0",
-            "-p=/srv/www/cobbler/repo_mirror",
+            "--download-path=/srv/www/cobbler/repo_mirror",
         ],
         shell=False,
     )
@@ -538,7 +538,7 @@ def test_create_local_file(mocker, reposync_object, repo):
     # Assert
     # TODO: Extend checks
     assert mock_open.call_count == 1
-    assert mock_open.mock_calls[0] == mocker.call("config.repo", "w+")
+    assert mock_open.mock_calls[0] == mocker.call("config.repo", "w+", encoding="UTF-8")
     mock_open_handle = mock_open()
     assert mock_open_handle.write.mock_calls[0] == mocker.call("[testrepo0]\n")
     assert mock_open_handle.write.mock_calls[1] == mocker.call("name=testrepo0\n")
