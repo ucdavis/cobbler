@@ -1168,8 +1168,8 @@ class TFTPGen:
                     else:
                         hostname = system.name
 
-                iso_path = "http://%s/ISOs/%s.iso" % (httpserveraddress, distro.name)
-                system_conf_path = "http://%s/nocloud-net/%s/" % (httpserveraddress, hostname)
+                iso_path = "http://%s/cobbler-html/ISOs/%s.iso" % (httpserveraddress, distro.name)
+                system_conf_path = "http://%s/cobbler-html/nocloud-net/%s/" % (httpserveraddress, hostname)
                 
                 append_line = "%s ip=dhcp url=%s autoinstall ds=nocloud-net;s=%s root=/dev/ram0 cloud-config-url=/dev/null" % (append_line, iso_path, system_conf_path)
             elif distro.breed == "freebsd":
