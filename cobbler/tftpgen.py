@@ -1160,16 +1160,8 @@ class TFTPGen:
             # 2022-10-21: OW
             # https://github.com/cobbler/cobbler/discussions/2698
             elif distro.breed == "ubuntu":
-                hostname = "DEFAULT"
-                if system is not None:
-                    if system.hostname is not None and system.hostname != "":
-                        # If this is a FQDN, grab the first bit
-                        hostname = system.hostname.split(".")[0]
-                    else:
-                        hostname = system.name
-
                 iso_path = "http://%s/cobbler-html/ISOs/%s.iso" % (httpserveraddress, distro.name)
-                system_conf_path = "http://%s/cobbler-html/nocloud-net/%s/" % (httpserveraddress, hostname)
+                system_conf_path = "http://%s/cobbler-html/nocloud-net/%s/" % (httpserveraddress, system.name)
                 
                 append_line = "%s ip=dhcp url=%s autoinstall ds=nocloud-net;s=%s root=/dev/ram0 cloud-config-url=/dev/null" % (append_line, iso_path, system_conf_path)
             elif distro.breed == "freebsd":
