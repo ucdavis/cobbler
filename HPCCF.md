@@ -11,11 +11,19 @@ deb built as: `deb-build/cobbler-3.4.0.tar.gz`
 /etc/cobbler/dhcp.template
 /etc/cobbler/named.template
 /etc/cobbler/settings.yaml
-/etc/apache2/conf-available/cobbler.conf
+/etc/apache2/sites-available/cobbler.conf
 ```
 ## Post installation bootstrapping
 
 ```bash
+a2ensite cobbler.conf
+a2enmod proxy_http
+systemctl restart apache2
+
+mkdir /var/www/cobbler /var/www/cobbler-html
+mkdir /var/lib/bind/data
+chown bind: /var/lib/bind/data
+
 cd /etc/systemd/system
 ln -s /etc/cobbler/cobblerd.service
 ln -s /etc/cobbler/cobblerd-gunicorn.service
@@ -24,6 +32,9 @@ systemctl enable --now cobblerd.service cobblerd-gunicorn.service
 ```
 
 ```bash
+# VERY IMPORTANT that this finish successfully
+cobbler sync
+
 cd /var/lib/cobbler/collections/images/
 wget https://releases.ubuntu.com/22.04.2/ubuntu-22.04.2-live-server-amd64.iso
 mount -o loop,ro ubuntu-22.04.2-live-server-amd64.iso /mnt/
