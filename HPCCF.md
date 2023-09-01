@@ -4,7 +4,13 @@
 deb built as: `deb-build/cobbler-3.4.0.tar.gz`
 
 ## Install
-`apt install python3-ldap python3-dnspython gunicorn`
+`apt install python3-ldap python3-dnspython gunicorn pxelinux ipxe shim-signed`
+
+# cp, NOT symlink. tftpd will not follow symlinks
+```
+cp -a  /usr/lib/PXELINUX/pxelinux.0 /srv/tftp/
+cp -a /usr/lib/syslinux/modules/bios/ldlinux.c32 .
+```
 
 ## Config files to check:
 ```
@@ -21,6 +27,8 @@ a2enmod proxy_http
 systemctl restart apache2
 
 mkdir /var/www/cobbler /var/www/cobbler-html
+mkdir /var/www/cobbler-html/ISOs/
+( cd /var/www/cobbler-html/ISOs/ && ln -s /var/lib/cobbler/collections/images/ubuntu-22.04.2-live-server-amd64.iso ubuntu-22.04-casper-x86_64.iso )
 mkdir /var/lib/bind/data
 chown bind: /var/lib/bind/data
 
