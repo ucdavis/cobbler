@@ -11,17 +11,23 @@ import glob
 import logging
 import os
 import time
-from typing import Optional, List, TYPE_CHECKING
+from typing import TYPE_CHECKING, Dict, List, Optional
 
+from cobbler import templar, tftpgen, utils
 from cobbler.cexceptions import CX
-from cobbler import templar
-from cobbler import tftpgen
-from cobbler import utils
 from cobbler.utils import filesystem_helpers
 
 if TYPE_CHECKING:
-    from cobbler.items.system import System
+    from cobbler.api import CobblerAPI
+    from cobbler.items.distro import Distro
+    from cobbler.items.image import Image
     from cobbler.items.profile import Profile
+    from cobbler.items.system import System
+    from cobbler.modules.managers import (
+        DhcpManagerModule,
+        DnsManagerModule,
+        TftpManagerModule,
+    )
 
 
 class CobblerSync:
@@ -29,7 +35,14 @@ class CobblerSync:
     Handles conversion of internal state to the tftpboot tree layout
     """
 
-    def __init__(self, api, verbose: bool = True, dhcp=None, dns=None, tftpd=None):
+    def __init__(
+        self,
+        api: "CobblerAPI",
+        verbose: bool = True,
+        dhcp: Optional["DhcpManagerModule"] = None,
+        dns: Optional["DnsManagerModule"] = None,
+        tftpd: Optional["TftpManagerModule"] = None,
+    ) -> None:
         """
         Constructor
 
@@ -51,8 +64,14 @@ class CobblerSync:
         self.repos = api.repos()
         self.templar = templar.Templar(self.api)
         self.tftpgen = tftpgen.TFTPGen(api)
+        if dns is None:
+            raise ValueError("dns not optional")
         self.dns = dns
+        if dhcp is None:
+            raise ValueError("dns not optional")
         self.dhcp = dhcp
+        if tftpd is None:
+            raise ValueError("dns not optional")
         self.tftpd = tftpd
         self.bootloc = self.settings.tftpboot_location
 
@@ -87,7 +106,7 @@ class CobblerSync:
         self.settings = self.api.settings()
         self.repos = self.api.repos()
 
-    def run_sync_systems(self, systems: List["System"]):
+    def run_sync_systems(self, systems: List[str]):
         """
         Syncs the specific systems with the config tree.
         """
@@ -115,7 +134,7 @@ class CobblerSync:
         utils.run_triggers(self.api, None, "/var/lib/cobbler/triggers/sync/post/*")
         utils.run_triggers(self.api, None, "/var/lib/cobbler/triggers/change/*")
 
-    def run(self):
+    def run(self) -> None:
         """
         Syncs the current configuration file with the config tree.
         Using the ``Check().run_`` functions previously is recommended
@@ -127,7 +146,7 @@ class CobblerSync:
         self.clean_trees()
 
         # Have the tftpd module handle copying bootloaders, distros, images, and all_system_files
-        self.tftpd.sync(self.verbose)
+        self.tftpd.sync()
         # Copy distros to the webdir
         # Adding in the exception handling to not blow up if files have been moved (or the path references an NFS
         # directory that's no longer mounted)
@@ -247,7 +266,7 @@ class CobblerSync:
                 ]
                 utils.subprocess_call(cmd, shell=False)
 
-    def rsync_gen(self):
+    def rsync_gen(self) -> None:
         """
         Generate rsync modules of all repositories and distributions
 
@@ -261,7 +280,7 @@ class CobblerSync:
         except Exception as error:
             raise OSError(f"error reading template {template_file}") from error
 
-        distros = []
+        distros: List[Dict[str, str]] = []
 
         for link in glob.glob(os.path.join(self.settings.webdir, "links", "*")):
             distro = {}
@@ -287,23 +306,19 @@ class CobblerSync:
 
         self.templar.render(template_data, metadata, "/etc/rsyncd.conf")
 
-    def add_single_distro(self, name):
+    def add_single_distro(self, distro_obj: "Distro") -> None:
         """
         Sync adding a single distro.
 
         :param name: The name of the distribution.
         """
-        # get the distro record
-        distro = self.distros.find(name=name)
-        if distro is None:
-            return
         # copy image files to images/$name in webdir & tftpboot:
-        self.tftpgen.copy_single_distro_files(distro, self.settings.webdir, True)
-        self.tftpd.add_single_distro(distro)
+        self.tftpgen.copy_single_distro_files(distro_obj, self.settings.webdir, True)
+        self.tftpd.add_single_distro(distro_obj)
 
         # create the symlink for this distro
-        src_dir = distro.find_distro_path()
-        dst_dir = os.path.join(self.settings.webdir, "links", name)
+        src_dir = distro_obj.find_distro_path()
+        dst_dir = os.path.join(self.settings.webdir, "links", distro_obj.name)
         if os.path.exists(dst_dir):
             self.logger.warning("skipping symlink, destination (%s) exists", dst_dir)
         elif (
@@ -325,27 +340,30 @@ class CobblerSync:
                 self.logger.error("symlink failed (%s -> %s)", src_dir, dst_dir)
 
         # generate any templates listed in the distro
-        self.tftpgen.write_templates(distro, write_file=True)
+        self.tftpgen.write_templates(distro_obj, write_file=True)
         # cascade sync
-        kids = self.api.find_items("profile", {"distro": name}, return_list=True)
+        kids = self.api.find_profile(return_list=True, **{"distro": distro_obj.name})
+        if not isinstance(kids, list):
+            raise ValueError("Expected to get list of profiles from search!")
         for k in kids:
             self.add_single_profile(k, rebuild_menu=False)
         self.tftpgen.make_pxe_menu()
 
-    def add_single_image(self, name):
+    def add_single_image(self, image_obj: "Image") -> None:
         """
         Sync adding a single image.
 
         :param name: The name of the image.
         """
-        image = self.images.find(name=name)
-        self.tftpgen.copy_single_image_files(image)
-        kids = self.api.find_items("system", {"image": name})
+        self.tftpgen.copy_single_image_files(image_obj)
+        kids = self.api.find_system(return_list=True, **{"image": image_obj.name})
+        if not isinstance(kids, list):
+            raise ValueError("Expected to get list of profiles from search!")
         for k in kids:
             self.add_single_system(k)
         self.tftpgen.make_pxe_menu()
 
-    def remove_single_distro(self, name):
+    def remove_single_distro(self, distro_obj: "Distro") -> None:
         """
         Sync removing a single distro.
 
@@ -353,25 +371,29 @@ class CobblerSync:
         """
         bootloc = self.settings.tftpboot_location
         # delete contents of images/$name directory in webdir
-        filesystem_helpers.rmtree(os.path.join(self.settings.webdir, "images", name))
+        filesystem_helpers.rmtree(
+            os.path.join(self.settings.webdir, "images", distro_obj.name)
+        )
         # delete contents of images/$name in tftpboot
-        filesystem_helpers.rmtree(os.path.join(bootloc, "images", name))
+        filesystem_helpers.rmtree(os.path.join(bootloc, "images", distro_obj.name))
         # delete potential symlink to tree in webdir/links
-        filesystem_helpers.rmfile(os.path.join(self.settings.webdir, "links", name))
+        filesystem_helpers.rmfile(
+            os.path.join(self.settings.webdir, "links", distro_obj.name)
+        )
         # delete potential distro config files
         filesystem_helpers.rmglob_files(
             os.path.join(self.settings.webdir, "distro_mirror", "config"),
-            name + "*.repo",
+            distro_obj.name + "*.repo",
         )
 
-    def remove_single_image(self, name):
+    def remove_single_image(self, image_obj: "Image") -> None:
         """
         Sync removing a single image.
 
-        :param name: The name of the image.
+        :param image_obj: The name of the image.
         """
         bootloc = self.settings.tftpboot_location
-        filesystem_helpers.rmfile(os.path.join(bootloc, "images2", name))
+        filesystem_helpers.rmfile(os.path.join(bootloc, "images2", image_obj.name))
 
     def add_single_profile(
         self, profile: "Profile", rebuild_menu: bool = True
@@ -383,25 +405,28 @@ class CobblerSync:
         :param rebuild_menu: Whether to rebuild the grub/... menu or not.
         :return: ``True`` if this succeeded.
         """
-        # get the profile object:
-        if profile is None:
+        if profile is None or isinstance(profile, list):  # type: ignore
             # Most likely a subprofile's kid has been removed already, though the object tree has not been reloaded and
             # this is just noise.
-            return
+            return None
         # Rebuild the yum configuration files for any attached repos generate any templates listed in the distro.
         self.tftpgen.write_templates(profile)
         # Cascade sync
         kids = profile.children
         for k in kids:
-            self.add_single_profile(k, rebuild_menu=False)
-        kids = self.api.find_items("system", {"profile": profile.name})
+            self.add_single_profile(k, rebuild_menu=False)  # type: ignore
+        kids = self.api.find_system(return_list=True, **{"profile": profile.name})
+        if not isinstance(kids, list):
+            raise ValueError("Expected to get list of profiles from search!")
         for k in kids:
             self.add_single_system(k)
         if rebuild_menu:
             self.tftpgen.make_pxe_menu()
         return True
 
-    def remove_single_profile(self, name: str, rebuild_menu: bool = True):
+    def remove_single_profile(
+        self, profile_obj: "Profile", rebuild_menu: bool = True
+    ) -> None:
         """
         Sync removing a single profile.
 
@@ -409,44 +434,42 @@ class CobblerSync:
         :param rebuild_menu: Whether to rebuild the grub/... menu or not.
         """
         # delete profiles/$name file in webdir
-        filesystem_helpers.rmfile(os.path.join(self.settings.webdir, "profiles", name))
+        filesystem_helpers.rmfile(
+            os.path.join(self.settings.webdir, "profiles", profile_obj.name)
+        )
         # delete contents on autoinstalls/$name directory in webdir
         filesystem_helpers.rmtree(
-            os.path.join(self.settings.webdir, "autoinstalls", name)
+            os.path.join(self.settings.webdir, "autoinstalls", profile_obj.name)
         )
         if rebuild_menu:
             self.tftpgen.make_pxe_menu()
 
-    def update_system_netboot_status(self, name: str):
+    def update_system_netboot_status(self, name: str) -> None:
         """
         Update the netboot status of a system.
 
         :param name: The name of the system.
         """
         system = self.systems.find(name=name)
-        if system is None:
+        if system is None or isinstance(system, list):
             return
         self.tftpd.sync_single_system(system)
 
-    def add_single_system(self, name: str):
+    def add_single_system(self, system_obj: "System") -> None:
         """
         Sync adding a single system.
 
         :param name: The name of the system.
         """
-        # get the system object:
-        system = self.systems.find(name=name)
-        if system is None:
-            return
         # rebuild system_list file in webdir
         if self.settings.manage_dhcp:
             self.dhcp.regen_ethers()
         if self.settings.manage_dns:
             self.dns.regen_hosts()
         # write the PXE files for the system
-        self.tftpd.sync_single_system(system)
+        self.tftpd.sync_single_system(system_obj)
 
-    def remove_single_system(self, name: str):
+    def remove_single_system(self, system_obj: "System") -> None:
         """
         Sync removing a single system.
 
@@ -454,31 +477,32 @@ class CobblerSync:
         """
         bootloc = self.settings.tftpboot_location
         # delete contents of autoinsts_sys/$name in webdir
-        system_record = self.systems.find(name=name)
-
-        for (interface_name, _) in list(system_record.interfaces.items()):
-            pxe_filename = system_record.get_config_filename(
+        for (interface_name, _) in list(system_obj.interfaces.items()):
+            pxe_filename = system_obj.get_config_filename(
                 interface=interface_name, loader="pxe"
             )
-            grub_filename = system_record.get_config_filename(
+            grub_filename = system_obj.get_config_filename(
                 interface=interface_name, loader="grub"
             )
-            filesystem_helpers.rmfile(
-                os.path.join(bootloc, "pxelinux.cfg", pxe_filename)
-            )
-            if not (system_record.name == "default" and grub_filename is None):
+            if pxe_filename is not None:
+                filesystem_helpers.rmfile(
+                    os.path.join(bootloc, "pxelinux.cfg", pxe_filename)
+                )
+            if not (system_obj.name == "default" and grub_filename is None):
                 # A default system can't have GRUB entries and thus we want to skip this.
                 filesystem_helpers.rmfile(
-                    os.path.join(bootloc, "grub", "system", grub_filename)
+                    os.path.join(bootloc, "grub", "system", grub_filename)  # type: ignore
                 )
             filesystem_helpers.rmfile(
-                os.path.join(bootloc, "grub", "system_link", system_record.name)
+                os.path.join(bootloc, "grub", "system_link", system_obj.name)
             )
-            filesystem_helpers.rmtree(os.path.join(bootloc, "esxi", pxe_filename))
+            if pxe_filename is not None:
+                filesystem_helpers.rmtree(os.path.join(bootloc, "esxi", pxe_filename))
 
-    def remove_single_menu(self, rebuild_menu: bool = True):
+    def remove_single_menu(self, rebuild_menu: bool = True) -> None:
         """
         Sync removing a single menu.
+
         :param rebuild_menu: Whether to rebuild the grub/... menu or not.
         """
         if rebuild_menu:

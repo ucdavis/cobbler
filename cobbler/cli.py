@@ -14,9 +14,7 @@ import traceback
 import xmlrpc.client
 from typing import Optional
 
-from cobbler import enums
-from cobbler import power_manager
-from cobbler import utils
+from cobbler import enums, power_manager, utils
 from cobbler.utils import signatures
 
 INVALID_TASK = "<<invalid>>"
@@ -2582,7 +2580,11 @@ class CobblerCLI:
                 "--only", dest="only", help="update only this repository name"
             )
             self.parser.add_option(
-                "--tries", dest="tries", help="try each repo this many times", default=1
+                "--tries",
+                dest="tries",
+                help="try each repo this many times",
+                default=1,
+                type="int",
             )
             self.parser.add_option(
                 "--no-fail",

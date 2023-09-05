@@ -51,7 +51,9 @@ RUN yum install -y          \
     fence-agents            \
     openldap-servers        \
     openldap-clients        \
-    supervisor
+    supervisor              \
+    mtools                  \
+    dosfstools
 
 # Dependencies for system tests
 RUN dnf install -y          \

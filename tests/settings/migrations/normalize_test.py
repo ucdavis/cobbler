@@ -9,14 +9,14 @@ Tests for the Cobbler settings normalizations
 import yaml
 
 from cobbler.settings.migrations import (
-    V3_3_0,
-    V3_2_1,
-    V3_2_0,
-    V3_1_2,
-    V3_1_1,
-    V3_1_0,
-    V3_0_1,
     V3_0_0,
+    V3_0_1,
+    V3_1_0,
+    V3_1_1,
+    V3_1_2,
+    V3_2_0,
+    V3_2_1,
+    V3_3_0,
     V3_3_1,
     V3_3_2,
     V3_3_3,
@@ -192,4 +192,5 @@ def test_normalize_v3_4_0_full():
     assert new_settings["mongodb"] == {"host": "localhost", "port": 27017}
     assert "cache_enabled" in new_settings
     assert new_settings["cache_enabled"] == False
-    assert len(V3_4_0.normalize(new_settings)) == 134
+    assert new_settings["lazy_start"] == False
+    assert len(V3_4_0.normalize(new_settings)) == 135

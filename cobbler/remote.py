@@ -1,5 +1,116 @@
 """
 This module contains all code related to the Cobbler XML-RPC API.
+
+Changelog:
+
+Schema: From -> To
+
+Current Schema: Please refer to the documentation visible of the individual methods.
+
+V3.4.0 (unreleased)
+    * Added:
+        * ``set_item_resolved_value``
+        * ``input_string_or_list_no_inherit``
+        * ``input_string_or_list``
+        * ``input_string_or_dict``
+        * ``input_string_or_dict_no_inherit``
+        * ``input_boolean``
+        * ``input_int``
+
+V3.3.4 (unreleased)
+    * No changes
+
+V3.3.3
+    * Added:
+        * ``get_item_resolved_value``
+        * ``dump_vars``
+
+V3.3.2
+    * No changes
+
+V3.3.1
+    * Changed:
+        * ``background_mkgrub``: Renamed to ``background_mkloaders``
+
+V3.3.0
+    * Added:
+        * ``background_syncsystems``
+        * ``background_mkgrub``
+        * ``get_menu``
+        * ``find_menu``
+        * ``get_menu_handle``
+        * ``remove_menu``
+        * ``copy_menu``
+        * ``rename_menu``
+        * ``new_menu``
+        * ``modify_menu``
+        * ``save_menu``
+        * ``get_valid_distro_boot_loaders``
+        * ``get_valid_image_boot_loaders``
+        * ``get_valid_profile_boot_loaders``
+        * ``get_valid_system_boot_loaders``
+        * ``get_menus_since``
+        * ``get_menu_as_rendered``
+    * Changed:
+        * ``generate_gpxe``: Renamed to ``generate_ipxe``
+    * Removed:
+        * ``background_dlcontent``
+        * ``get_distro_for_koan``
+        * ``get_profile_for_koan``
+        * ``get_system_for_koan``
+        * ``get_repo_for_koan``
+        * ``get_image_for_koan``
+        * ``get_mgmtclass_for_koan``
+        * ``get_package_for_koan``
+        * ``get_file_for_koan``
+        * ``get_file_for_koan``
+
+V3.2.2
+    * No changes
+
+V3.2.1
+    * Added:
+        * ``auto_add_repos``
+
+V3.2.0
+    * No changes
+
+V3.1.2
+    * No changes
+
+V3.1.1
+    * No changes
+
+V3.1.0
+    * No changes
+
+V3.0.1
+    * No changes
+
+V3.0.0
+    * Added:
+        * ``generate_profile_autoinstall``
+        * ``generate_system_autoinstall``
+        * ``get_valid_archs``
+        * ``read_autoinstall_template``
+        * ``write_autoinstall_template``
+        * ``remove_autoinstall_template``
+        * ``read_autoinstall_snippet``
+        * ``write_autoinstall_snippet``
+        * ``remove_autoinstall_snippet``
+    * Changed:
+        * ``get_kickstart_templates``: Renamed to ``get_autoinstall_templates``
+        * ``get_snippets``: Renamed to ``get_autoinstall_snippets``
+        * ``is_kickstart_in_use``: Renamed to ``is_autoinstall_in_use``
+        * ``generate_kickstart``: Renamed to ``generate_autoinstall``
+    * Removed:
+        * ``update``
+        * ``read_or_write_kickstart_template``
+        * ``read_or_write_snippet``
+
+V2.8.5
+    * Inital tracking of changes.
+
 """
 
 # SPDX-License-Identifier: GPL-2.0-or-later
@@ -13,27 +124,32 @@ import keyword
 import logging
 import os
 import random
+import re
 import stat
 import time
-import re
 import xmlrpc.server
 from socketserver import ThreadingMixIn
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Dict,
+    Iterable,
+    List,
+    Optional,
+    Sequence,
+    Tuple,
+    Type,
+    Union,
+)
 from xmlrpc.server import SimpleXMLRPCRequestHandler
 
-from cobbler import enums
-from cobbler import autoinstall_manager
-from cobbler import configgen
-from cobbler.items import (
-    item,
-    system,
-)
-from cobbler import tftpgen
-from cobbler import utils
+from cobbler import autoinstall_manager, configgen, enums, tftpgen, utils
+from cobbler.cexceptions import CX
+from cobbler.items import item, system
 from cobbler.utils import signatures
 from cobbler.utils.event import CobblerEvent
 from cobbler.utils.thread import CobblerThread
-from cobbler.cexceptions import CX
 from cobbler.validate import (
     validate_autoinstall_script_name,
     validate_obj_name,
@@ -41,7 +157,14 @@ from cobbler.validate import (
 )
 
 if TYPE_CHECKING:
+    import xmlrpc.client
+
     from cobbler.api import CobblerAPI
+    from cobbler.cobbler_collections.collection import ITEM, ITEM_UNION
+    from cobbler.items.distro import Distro
+    from cobbler.items.image import Image
+    from cobbler.items.profile import Profile
+
 
 EVENT_TIMEOUT = 7 * 24 * 60 * 60  # 1 week
 CACHE_TIMEOUT = 10 * 60  # 10 minutes
@@ -62,8 +185,8 @@ class CobblerXMLRPCInterface:
         """
         self.api = api
         self.logger = logging.getLogger()
-        self.token_cache: Dict[str, tuple] = {}
-        self.unsaved_items = {}
+        self.token_cache: Dict[str, Tuple[Any, ...]] = {}
+        self.unsaved_items: Dict[str, Tuple[float, "ITEM_UNION"]] = {}
         self.timestamp = self.api.last_modified_time()
         self.events: Dict[str, CobblerEvent] = {}
         self.shared_secret = utils.get_shared_secret()
@@ -71,7 +194,7 @@ class CobblerXMLRPCInterface:
         self.tftpgen = tftpgen.TFTPGen(api)
         self.autoinstall_mgr = autoinstall_manager.AutoInstallationManager(api)
 
-    def check(self, token: str) -> list:
+    def check(self, token: str) -> List[str]:
         """
         Returns a list of all the messages/warnings that are things that admin may want to correct about the
         configuration of the Cobbler server. This has nothing to do with "check_access" which is an auth/authz function
@@ -83,7 +206,7 @@ class CobblerXMLRPCInterface:
         self.check_access(token, "check")
         return self.api.check()
 
-    def background_buildiso(self, options: dict, token: str) -> str:
+    def background_buildiso(self, options: Dict[str, Any], token: str) -> str:
         """
         Generates an ISO in /var/www/cobbler/pub that can be used to install profiles without using PXE.
 
@@ -93,7 +216,9 @@ class CobblerXMLRPCInterface:
         """
         webdir = self.api.settings().webdir
 
-        def runner(self):
+        def runner(self: CobblerThread):
+            if not isinstance(self.options, dict):
+                raise ValueError("Options need to be dict for background_buildiso!")
             self.remote.api.build_iso(
                 self.options.get("iso", webdir + "/pub/generated.iso"),
                 self.options.get("profiles", None),
@@ -107,7 +232,9 @@ class CobblerXMLRPCInterface:
                 self.options.get("xorrisofs_opts", ""),
             )
 
-        def on_done(self):
+        def on_done(self: CobblerThread):
+            if not isinstance(self.options, dict):
+                raise ValueError("Options need to be dict for background_buildiso!")
             if self.options.get("iso", "") == webdir + "/pub/generated.iso":
                 msg = 'ISO now available for <A HREF="/cobbler/pub/generated.iso">download</A>'
                 self.remote._new_event(msg)
@@ -116,7 +243,7 @@ class CobblerXMLRPCInterface:
             runner, token, "buildiso", "Build Iso", options, on_done
         )
 
-    def background_aclsetup(self, options: dict, token: str) -> str:
+    def background_aclsetup(self, options: Dict[str, Any], token: str) -> str:
         """
         Get the acl configuration from the config and set the acls in the backgroud.
 
@@ -125,7 +252,11 @@ class CobblerXMLRPCInterface:
         :return: The id of the task which was started.
         """
 
-        def runner(self):
+        def runner(self: CobblerThread):
+            if not isinstance(self.options, dict):
+                raise ValueError(
+                    "self.options needs to be dict for background_aclsetup!"
+                )
             self.remote.api.acl_config(
                 self.options.get("adduser", None),
                 self.options.get("addgroup", None),
@@ -137,7 +268,7 @@ class CobblerXMLRPCInterface:
             runner, token, "aclsetup", "(CLI) ACL Configuration", options
         )
 
-    def background_sync(self, options: dict, token: str) -> str:
+    def background_sync(self, options: Dict[str, Any], token: str) -> str:
         """
         Run a full Cobbler sync in the background.
 
@@ -146,8 +277,10 @@ class CobblerXMLRPCInterface:
         :return: The id of the task which was started.
         """
 
-        def runner(self):
-            what = []
+        def runner(self: CobblerThread):
+            if isinstance(self.options, list):
+                raise ValueError("options for background_sync need to be dict!")
+            what: List[str] = []
             if self.options.get("dhcp", False):
                 what.append("dhcp")
             if self.options.get("dns", False):
@@ -156,7 +289,7 @@ class CobblerXMLRPCInterface:
 
         return self.__start_task(runner, token, "sync", "Sync", options)
 
-    def background_syncsystems(self, options: dict, token: str) -> str:
+    def background_syncsystems(self, options: Dict[str, Any], token: str) -> str:
         """
         Run a lite Cobbler sync in the background with only systems specified.
 
@@ -165,14 +298,16 @@ class CobblerXMLRPCInterface:
         :return: The id of the task that was started.
         """
 
-        def runner(self):
+        def runner(self: "CobblerThread"):
+            if isinstance(self.options, list):
+                raise ValueError("options for background_syncsystems need to be dict!")
             self.remote.api.sync_systems(
                 self.options.get("systems", []), self.options.get("verbose", False)
             )
 
         return self.__start_task(runner, token, "syncsystems", "Syncsystems", options)
 
-    def background_hardlink(self, options: dict, token: str) -> str:
+    def background_hardlink(self, options: Dict[str, Any], token: str) -> str:
         """
         Hardlink all files as a background task.
 
@@ -181,12 +316,14 @@ class CobblerXMLRPCInterface:
         :return: The id of the task which was started.
         """
 
-        def runner(self):
+        def runner(self: "CobblerThread"):
             self.remote.api.hardlink()
 
         return self.__start_task(runner, token, "hardlink", "Hardlink", options)
 
-    def background_validate_autoinstall_files(self, options: dict, token: str) -> str:
+    def background_validate_autoinstall_files(
+        self, options: Dict[str, Any], token: str
+    ) -> str:
         """
         Validate all autoinstall files in the background.
 
@@ -195,7 +332,7 @@ class CobblerXMLRPCInterface:
         :return: The id of the task which was started.
         """
 
-        def runner(self):
+        def runner(self: "CobblerThread"):
             return self.remote.api.validate_autoinstall_files()
 
         return self.__start_task(
@@ -206,7 +343,7 @@ class CobblerXMLRPCInterface:
             options,
         )
 
-    def background_replicate(self, options: dict, token: str) -> str:
+    def background_replicate(self, options: Dict[str, Any], token: str) -> str:
         """
         Replicate Cobbler in the background to another Cobbler instance.
 
@@ -215,8 +352,10 @@ class CobblerXMLRPCInterface:
         :return: The id of the task which was started.
         """
 
-        def runner(self):
+        def runner(self: "CobblerThread"):
             # FIXME: defaults from settings here should come from views, fix in views.py
+            if isinstance(self.options, list):
+                raise ValueError("options for background_replicate need to be dict!")
             self.remote.api.replicate(
                 self.options.get("master", None),
                 self.options.get("port", ""),
@@ -236,7 +375,7 @@ class CobblerXMLRPCInterface:
 
         return self.__start_task(runner, token, "replicate", "Replicate", options)
 
-    def background_import(self, options: dict, token: str) -> str:
+    def background_import(self, options: Dict[str, Any], token: str) -> str:
         """
         Import an ISO image in the background.
 
@@ -245,7 +384,9 @@ class CobblerXMLRPCInterface:
         :return: The id of the task which was started.
         """
 
-        def runner(self):
+        def runner(self: "CobblerThread"):
+            if isinstance(self.options, list):
+                raise ValueError("options for background_import need to be dict!")
             self.remote.api.import_tree(
                 self.options.get("path", None),
                 self.options.get("name", None),
@@ -259,7 +400,7 @@ class CobblerXMLRPCInterface:
 
         return self.__start_task(runner, token, "import", "Media import", options)
 
-    def background_reposync(self, options: dict, token: str) -> str:
+    def background_reposync(self, options: Dict[str, Any], token: str) -> str:
         """
         Run a reposync in the background.
 
@@ -268,8 +409,11 @@ class CobblerXMLRPCInterface:
         :return: The id of the task which was started.
         """
 
-        def runner(self):
+        def runner(self: "CobblerThread"):
             # NOTE: WebUI passes in repos here, CLI passes only:
+            if isinstance(self.options, list):
+                raise ValueError("options for background_reposync need to be dict!")
+
             repos = options.get("repos", [])
             only = options.get("only", None)
             if only is not None:
@@ -288,7 +432,7 @@ class CobblerXMLRPCInterface:
 
         return self.__start_task(runner, token, "reposync", "Reposync", options)
 
-    def background_power_system(self, options: dict, token: str) -> str:
+    def background_power_system(self, options: Dict[str, Any], token: str) -> str:
         """
         Power a system asynchronously in the background.
 
@@ -297,11 +441,14 @@ class CobblerXMLRPCInterface:
         :return: The id of the task which was started.
         """
 
-        def runner(self):
+        def runner(self: "CobblerThread"):
+            if isinstance(self.options, list):
+                raise ValueError("options for background_power_system need to be dict!")
+
             for system_name in self.options.get("systems", []):
                 try:
                     system_obj = self.remote.api.find_system(name=system_name)
-                    if system_obj is None:
+                    if system_obj is None or isinstance(system_obj, list):
                         raise ValueError(f'System with name "{system_name}" not found')
                     self.remote.api.power_system(
                         system_obj, self.options.get("power", "")
@@ -331,14 +478,16 @@ class CobblerXMLRPCInterface:
         :param system_id: system handle
         :param power: power operation (on/off/status/reboot)
         """
-        system_obj = self.api.find_system(criteria={"uid": system_id})
-        if system_obj is None:
+        system_obj = self.api.find_system(
+            criteria={"uid": system_id}, return_list=False
+        )
+        if system_obj is None or isinstance(system_obj, list):
             raise ValueError(f'System with uid "{system_id}" not found')
-        self.check_access(token, "power_system", system_obj)
+        self.check_access(token, "power_system", system_obj.name)
         result = self.api.power_system(system_obj, power)
         return True if result is None else result
 
-    def background_signature_update(self, options: dict, token: str) -> str:
+    def background_signature_update(self, options: Dict[str, Any], token: str) -> str:
         """
         Run a signature update in the background.
 
@@ -347,7 +496,7 @@ class CobblerXMLRPCInterface:
         :return: The id of the task which was started.
         """
 
-        def runner(self):
+        def runner(self: "CobblerThread"):
             self.remote.api.signature_update()
 
         self.check_access(token, "sigupdate")
@@ -355,7 +504,7 @@ class CobblerXMLRPCInterface:
             runner, token, "sigupdate", "Updating Signatures", options
         )
 
-    def background_mkloaders(self, options: dict, token: str) -> str:
+    def background_mkloaders(self, options: Dict[str, Any], token: str) -> str:
         """
         TODO
 
@@ -364,14 +513,14 @@ class CobblerXMLRPCInterface:
         :return: TODO
         """
 
-        def runner(self):
+        def runner(self: "CobblerThread"):
             return self.api.mkloaders()
 
         return self.__start_task(
             runner, token, "mkloaders", "Create bootable bootloader images", options
         )
 
-    def get_events(self, for_user: str = "") -> dict:
+    def get_events(self, for_user: str = "") -> Dict[str, List[Union[str, float]]]:
         """
         Returns a dict(key=event id) = [ statetime, name, state, [read_by_who] ]
 
@@ -379,16 +528,16 @@ class CobblerXMLRPCInterface:
         :return: A dictionary with all the events (or all filtered events).
         """
         # Check for_user not none
-        if not isinstance(for_user, str):
+        if not isinstance(for_user, str):  # type: ignore
             raise TypeError('"for_user" must be of type str (may be empty str)!')
 
         # return only the events the user has not seen
-        events_filtered = {}
+        events_filtered: Dict[str, List[Union[str, float]]] = {}
         for event_details in self.events.values():
             if for_user in event_details.read_by_who:
                 continue
 
-            events_filtered[event_details.event_id] = list(event_details)
+            events_filtered[event_details.event_id] = list(event_details)  # type: ignore
             # If a user is given (and not already in read list), add read tag, so user won't get the event twice
             if for_user and for_user not in event_details.read_by_who:
                 event_details.read_by_who.append(for_user)
@@ -402,7 +551,7 @@ class CobblerXMLRPCInterface:
         :param event_id: The event-id generated by Cobbler.
         :return: The event log or a ``?``.
         """
-        if not isinstance(event_id, str):
+        if not isinstance(event_id, str):  # type: ignore
             raise TypeError('"event_id" must be of type str!')
         if event_id not in self.events:
             # This ensures the event_id is valid, and we only read files we want to read.
@@ -427,12 +576,12 @@ class CobblerXMLRPCInterface:
 
     def __start_task(
         self,
-        thr_obj_fn,
+        thr_obj_fn: Callable[["CobblerThread"], None],
         token: str,
         role_name: str,
         name: str,
-        args: dict,
-        on_done=None,
+        args: Dict[str, Any],
+        on_done: Optional[Callable[["CobblerThread"], None]] = None,
     ):
         """
         Starts a new background task.
@@ -457,20 +606,21 @@ class CobblerXMLRPCInterface:
         thr_obj.start()
         return new_event.event_id
 
-    def get_task_status(self, event_id: str):
+    def get_task_status(self, event_id: str) -> List[Union[str, float, List[str]]]:
         """
         Get the current status of the task.
 
         :param event_id: The unique id of the task.
         :return: The event status.
         """
-        if not isinstance(event_id, str):
+        if not isinstance(event_id, str):  # type: ignore
             raise TypeError('"event_id" must be of type str!')
         if event_id not in self.events:
             raise CX("no event with that id")
-        return list(self.events[event_id])
+        # The following works because __getitem__ is implemented.
+        return list(self.events[event_id])  # type: ignore
 
-    def last_modified_time(self, token=None) -> float:
+    def last_modified_time(self, token: Optional[str] = None) -> float:
         """
         Return the time of the last modification to any object. Used to verify from a calling application that no
         Cobbler objects have changed since last check. This method is implemented in the module api under the same name.
@@ -488,7 +638,7 @@ class CobblerXMLRPCInterface:
         """
         return True
 
-    def get_user_from_token(self, token: str) -> str:
+    def get_user_from_token(self, token: Optional[str]) -> str:
         """
         Given a token returned from login, return the username that logged in with it.
 
@@ -526,7 +676,7 @@ class CobblerXMLRPCInterface:
         :param error: If the message logged is an error message.
         """
         if not all(
-            (isinstance(error, bool), isinstance(debug, bool), isinstance(msg, str))
+            (isinstance(error, bool), isinstance(debug, bool), isinstance(msg, str))  # type: ignore
         ):
             return
         # add the user editing the object, if supplied
@@ -552,7 +702,7 @@ class CobblerXMLRPCInterface:
         # add any attributes being modified, if any
         if attribute:
             if (
-                isinstance(attribute, str) and attribute.isidentifier()
+                isinstance(attribute, str) and attribute.isidentifier()  # type: ignore
             ) or keyword.iskeyword(attribute):
                 return
             msg = f"{msg}; attribute({attribute})"
@@ -565,7 +715,9 @@ class CobblerXMLRPCInterface:
         else:
             self.logger.info(msg)
 
-    def __sort(self, data, sort_field: Optional[str] = None):
+    def __sort(
+        self, data: Iterable["ITEM"], sort_field: Optional[str] = None
+    ) -> List["ITEM"]:
         """
         Helper function used by the various find/search functions to return object representations in order.
 
@@ -585,9 +737,15 @@ class CobblerXMLRPCInterface:
             sortdata.sort(reverse=True)
         else:
             sortdata.sort()
-        return [x for (key, x) in sortdata]
+        return [x for (_, x) in sortdata]
 
-    def __paginate(self, data, page=1, items_per_page=25, token=None):
+    def __paginate(
+        self,
+        data: Sequence["ITEM"],
+        page: int = 1,
+        items_per_page: int = 25,
+        token: Optional[str] = None,
+    ) -> Tuple[Sequence["ITEM"], Dict[str, Union[List[int], int]]]:
         """
         Helper function to support returning parts of a selection, for example, for use in a web app where only a part
         of the results are to be presented on each screen.
@@ -631,11 +789,11 @@ class CobblerXMLRPCInterface:
         if page > 1:
             prev_page = page - 1
         else:
-            prev_page = None
+            prev_page = -1
         if page < num_pages:
             next_page = page + 1
         else:
-            next_page = None
+            next_page = -1
 
         return (
             data,
@@ -653,7 +811,7 @@ class CobblerXMLRPCInterface:
             },
         )
 
-    def __get_object(self, object_id: str):
+    def __get_object(self, object_id: str) -> "ITEM_UNION":
         """
         Helper function. Given an object id, return the actual object.
 
@@ -662,14 +820,21 @@ class CobblerXMLRPCInterface:
         """
         if object_id in self.unsaved_items:
             return self.unsaved_items[object_id][1]
-        return self.api.find_items("", criteria={"uid": object_id}, return_list=False)
+        obj = self.api.find_items("", criteria={"uid": object_id}, return_list=False)
+        if obj is None or isinstance(obj, list):
+            raise ValueError("Object not found or ambigous match!")
+        return obj
 
-    def get_item_resolved_value(self, item_uuid: str, attribute: str):
+    def get_item_resolved_value(
+        self, item_uuid: str, attribute: str
+    ) -> Union[str, int, float, List[Any], Dict[Any, Any]]:
         """
         .. seealso:: Logically identical to :func:`~cobbler.api.CobblerAPI.get_item_resolved_value`
         """
         self._log(f"get_item_resolved_value({item_uuid})", attribute=attribute)
-        return_value = self.api.get_item_resolved_value(item_uuid, attribute)
+        return_value: Optional[
+            Union[str, int, float, enums.ConvertableEnum, List[Any], Dict[Any, Any]]
+        ] = self.api.get_item_resolved_value(item_uuid, attribute)
         if return_value is None:
             self._log(
                 f"get_item_resolved_value({item_uuid}): returned None",
@@ -695,7 +860,7 @@ class CobblerXMLRPCInterface:
                     for value in return_value.values()
                 )
             ):
-                interface_return_value = {}
+                interface_return_value: Dict[Any, Any] = {}
                 for interface_name in return_value:
                     interface_return_value[interface_name] = return_value[
                         interface_name
@@ -716,7 +881,7 @@ class CobblerXMLRPCInterface:
         return return_value
 
     def set_item_resolved_value(
-        self, item_uuid: str, attribute: str, value, token=None
+        self, item_uuid: str, attribute: str, value: Any, token: Optional[str] = None
     ):
         """
         .. seealso:: Logically identical to :func:`~cobbler.api.CobblerAPI.set_item_resolved_value`
@@ -728,12 +893,14 @@ class CobblerXMLRPCInterface:
         obj = self.api.find_items(
             "", {"uid": item_uuid}, return_list=False, no_errors=True
         )
-        if obj is None:
+        if obj is None or isinstance(obj, list):
             raise ValueError(f'Item with item_uuid "{item_uuid}" did not exist!')
-        self.check_access(token, f"modify_{obj.COLLECTION_TYPE}", obj, attribute)
+        self.check_access(token, f"modify_{obj.COLLECTION_TYPE}", obj.name, attribute)
         return self.api.set_item_resolved_value(item_uuid, attribute, value)
 
-    def get_item(self, what: str, name: str, flatten=False, resolved: bool = False):
+    def get_item(
+        self, what: str, name: str, flatten: bool = False, resolved: bool = False
+    ):
         """
         Returns a dict describing a given object.
 
@@ -753,7 +920,12 @@ class CobblerXMLRPCInterface:
         return self.xmlrpc_hacks(requested_item)
 
     def get_distro(
-        self, name: str, flatten=False, resolved: bool = False, token=None, **rest
+        self,
+        name: str,
+        flatten: bool = False,
+        resolved: bool = False,
+        token: Optional[str] = None,
+        **rest: Any,
     ):
         """
         Get a distribution.
@@ -769,7 +941,12 @@ class CobblerXMLRPCInterface:
         return self.get_item("distro", name, flatten=flatten, resolved=resolved)
 
     def get_profile(
-        self, name: str, flatten=False, resolved: bool = False, token=None, **rest
+        self,
+        name: str,
+        flatten: bool = False,
+        resolved: bool = False,
+        token: Optional[str] = None,
+        **rest: Any,
     ):
         """
         Get a profile.
@@ -785,7 +962,12 @@ class CobblerXMLRPCInterface:
         return self.get_item("profile", name, flatten=flatten, resolved=resolved)
 
     def get_system(
-        self, name: str, flatten=False, resolved: bool = False, token=None, **rest
+        self,
+        name: str,
+        flatten: bool = False,
+        resolved: bool = False,
+        token: Optional[str] = None,
+        **rest: Any,
     ):
         """
         Get a system.
@@ -801,7 +983,12 @@ class CobblerXMLRPCInterface:
         return self.get_item("system", name, flatten=flatten, resolved=resolved)
 
     def get_repo(
-        self, name: str, flatten=False, resolved: bool = False, token=None, **rest
+        self,
+        name: str,
+        flatten: bool = False,
+        resolved: bool = False,
+        token: Optional[str] = None,
+        **rest: Any,
     ):
         """
         Get a repository.
@@ -817,7 +1004,12 @@ class CobblerXMLRPCInterface:
         return self.get_item("repo", name, flatten=flatten, resolved=resolved)
 
     def get_image(
-        self, name: str, flatten=False, resolved: bool = False, token=None, **rest
+        self,
+        name: str,
+        flatten: bool = False,
+        resolved: bool = False,
+        token: Optional[str] = None,
+        **rest: Any,
     ):
         """
         Get an image.
@@ -833,7 +1025,12 @@ class CobblerXMLRPCInterface:
         return self.get_item("image", name, flatten=flatten, resolved=resolved)
 
     def get_mgmtclass(
-        self, name: str, flatten=False, resolved: bool = False, token=None, **rest
+        self,
+        name: str,
+        flatten: bool = False,
+        resolved: bool = False,
+        token: Optional[str] = None,
+        **rest: Any,
     ):
         """
         Get a management class.
@@ -849,7 +1046,12 @@ class CobblerXMLRPCInterface:
         return self.get_item("mgmtclass", name, flatten=flatten, resolved=resolved)
 
     def get_package(
-        self, name: str, flatten=False, resolved: bool = False, token=None, **rest
+        self,
+        name: str,
+        flatten: bool = False,
+        resolved: bool = False,
+        token: Optional[str] = None,
+        **rest: Any,
     ):
         """
         Get a package.
@@ -865,7 +1067,12 @@ class CobblerXMLRPCInterface:
         return self.get_item("package", name, flatten=flatten, resolved=resolved)
 
     def get_file(
-        self, name: str, flatten=False, resolved: bool = False, token=None, **rest
+        self,
+        name: str,
+        flatten: bool = False,
+        resolved: bool = False,
+        token: Optional[str] = None,
+        **rest: Any,
     ):
         """
         Get a file.
@@ -885,8 +1092,8 @@ class CobblerXMLRPCInterface:
         name: str,
         flatten: bool = False,
         resolved: bool = False,
-        token=None,
-        **rest,
+        token: Optional[str] = None,
+        **rest: Any,
     ):
         """
         Get a menu.
@@ -901,7 +1108,7 @@ class CobblerXMLRPCInterface:
         """
         return self.get_item("menu", name, flatten=flatten, resolved=resolved)
 
-    def get_items(self, what: str):
+    def get_items(self, what: str) -> List[Dict[str, Any]]:
         """
         Individual list elements are the same for get_item.
 
@@ -909,9 +1116,9 @@ class CobblerXMLRPCInterface:
         :return: This returns a list of dicts.
         """
         items = [x.to_dict() for x in self.api.get_items(what)]
-        return self.xmlrpc_hacks(items)
+        return self.xmlrpc_hacks(items)  # type: ignore
 
-    def get_item_names(self, what: str):
+    def get_item_names(self, what: str) -> List[str]:
         """
         This is just like get_items, but transmits less data.
 
@@ -920,7 +1127,13 @@ class CobblerXMLRPCInterface:
         """
         return [x.name for x in self.api.get_items(what)]
 
-    def get_distros(self, page=None, results_per_page=None, token=None, **rest):
+    def get_distros(
+        self,
+        page: Any = None,
+        results_per_page: Any = None,
+        token: Optional[str] = None,
+        **rest: Any,
+    ) -> List[Dict[str, Any]]:
         """
         This returns all distributions.
 
@@ -932,7 +1145,13 @@ class CobblerXMLRPCInterface:
         """
         return self.get_items("distro")
 
-    def get_profiles(self, page=None, results_per_page=None, token=None, **rest):
+    def get_profiles(
+        self,
+        page: Any = None,
+        results_per_page: Any = None,
+        token: Optional[str] = None,
+        **rest: Any,
+    ) -> List[Dict[str, Any]]:
         """
         This returns all profiles.
 
@@ -944,7 +1163,13 @@ class CobblerXMLRPCInterface:
         """
         return self.get_items("profile")
 
-    def get_systems(self, page=None, results_per_page=None, token=None, **rest):
+    def get_systems(
+        self,
+        page: Any = None,
+        results_per_page: Any = None,
+        token: Optional[str] = None,
+        **rest: Any,
+    ) -> List[Dict[str, Any]]:
         """
         This returns all Systems.
 
@@ -956,7 +1181,13 @@ class CobblerXMLRPCInterface:
         """
         return self.get_items("system")
 
-    def get_repos(self, page=None, results_per_page=None, token=None, **rest):
+    def get_repos(
+        self,
+        page: Any = None,
+        results_per_page: Any = None,
+        token: Optional[str] = None,
+        **rest: Any,
+    ) -> List[Dict[str, Any]]:
         """
         This returns all repositories.
 
@@ -968,7 +1199,13 @@ class CobblerXMLRPCInterface:
         """
         return self.get_items("repo")
 
-    def get_images(self, page=None, results_per_page=None, token=None, **rest):
+    def get_images(
+        self,
+        page: Any = None,
+        results_per_page: Any = None,
+        token: Optional[str] = None,
+        **rest: Any,
+    ) -> List[Dict[str, Any]]:
         """
         This returns all images.
 
@@ -980,7 +1217,13 @@ class CobblerXMLRPCInterface:
         """
         return self.get_items("image")
 
-    def get_mgmtclasses(self, page=None, results_per_page=None, token=None, **rest):
+    def get_mgmtclasses(
+        self,
+        page: Any = None,
+        results_per_page: Any = None,
+        token: Optional[str] = None,
+        **rest: Any,
+    ) -> List[Dict[str, Any]]:
         """
         This returns all managementclasses.
 
@@ -992,7 +1235,13 @@ class CobblerXMLRPCInterface:
         """
         return self.get_items("mgmtclass")
 
-    def get_packages(self, page=None, results_per_page=None, token=None, **rest):
+    def get_packages(
+        self,
+        page: Any = None,
+        results_per_page: Any = None,
+        token: Optional[str] = None,
+        **rest: Any,
+    ) -> List[Dict[str, Any]]:
         """
         This returns all packages.
 
@@ -1004,7 +1253,13 @@ class CobblerXMLRPCInterface:
         """
         return self.get_items("package")
 
-    def get_files(self, page=None, results_per_page=None, token=None, **rest):
+    def get_files(
+        self,
+        page: Any = None,
+        results_per_page: Any = None,
+        token: Optional[str] = None,
+        **rest: Any,
+    ) -> List[Dict[str, Any]]:
         """
         This returns all files.
 
@@ -1016,7 +1271,13 @@ class CobblerXMLRPCInterface:
         """
         return self.get_items("file")
 
-    def get_menus(self, page=None, results_per_page=None, token=None, **rest):
+    def get_menus(
+        self,
+        page: Any = None,
+        results_per_page: Any = None,
+        token: Optional[str] = None,
+        **rest: Any,
+    ) -> List[Dict[str, Any]]:
         """
         This returns all menus.
 
@@ -1031,11 +1292,13 @@ class CobblerXMLRPCInterface:
     def find_items(
         self,
         what: str,
-        criteria: Optional[dict] = None,
-        sort_field=None,
-        expand: bool = True,
+        criteria: Optional[Dict[str, Any]] = None,
+        sort_field: Optional[str] = None,
+        expand: bool = False,
         resolved: bool = False,
-    ) -> list:
+        token: Optional[str] = None,
+        **rest: Any,
+    ) -> List[Any]:
         """Works like get_items but also accepts criteria as a dict to search on.
 
         Example: ``{ "name" : "*.example.org" }``
@@ -1058,21 +1321,23 @@ class CobblerXMLRPCInterface:
             items = self.api.find_items(what, criteria=criteria, name=name)
         else:
             items = self.api.find_items(what, criteria=criteria)
-        items = self.__sort(items, sort_field)
+        if items is None:
+            return []
+        items = self.__sort(items, sort_field)  # type: ignore
         if not expand:
-            items = [x.name for x in items]
+            items = [x.name for x in items]  # type: ignore
         else:
-            items = [x.to_dict(resolved=resolved) for x in items]
-        return self.xmlrpc_hacks(items)
+            items = [x.to_dict(resolved=resolved) for x in items]  # type: ignore
+        return self.xmlrpc_hacks(items)  # type: ignore
 
     def find_distro(
         self,
-        criteria: Optional[dict] = None,
-        expand=False,
+        criteria: Optional[Dict[str, Any]] = None,
+        expand: bool = False,
         resolved: bool = False,
-        token=None,
-        **rest,
-    ):
+        token: Optional[str] = None,
+        **rest: Any,
+    ) -> List[Any]:
         """
         Find a distro matching certain criteria.
 
@@ -1088,12 +1353,12 @@ class CobblerXMLRPCInterface:
 
     def find_profile(
         self,
-        criteria: Optional[dict] = None,
-        expand=False,
+        criteria: Optional[Dict[str, Any]] = None,
+        expand: bool = False,
         resolved: bool = False,
-        token=None,
-        **rest,
-    ):
+        token: Optional[str] = None,
+        **rest: Any,
+    ) -> List[Any]:
         """
         Find a profile matching certain criteria.
 
@@ -1109,12 +1374,12 @@ class CobblerXMLRPCInterface:
 
     def find_system(
         self,
-        criteria: Optional[dict] = None,
-        expand=False,
+        criteria: Optional[Dict[str, Any]] = None,
+        expand: bool = False,
         resolved: bool = False,
-        token=None,
-        **rest,
-    ):
+        token: Optional[str] = None,
+        **rest: Any,
+    ) -> List[Any]:
         """
         Find a system matching certain criteria.
 
@@ -1130,12 +1395,12 @@ class CobblerXMLRPCInterface:
 
     def find_repo(
         self,
-        criteria: Optional[dict] = None,
-        expand=False,
+        criteria: Optional[Dict[str, Any]] = None,
+        expand: bool = False,
         resolved: bool = False,
-        token=None,
-        **rest,
-    ):
+        token: Optional[str] = None,
+        **rest: Any,
+    ) -> List[Any]:
         """
         Find a repository matching certain criteria.
 
@@ -1151,12 +1416,12 @@ class CobblerXMLRPCInterface:
 
     def find_image(
         self,
-        criteria: Optional[dict] = None,
-        expand=False,
+        criteria: Optional[Dict[str, Any]] = None,
+        expand: bool = False,
         resolved: bool = False,
-        token=None,
-        **rest,
-    ):
+        token: Optional[str] = None,
+        **rest: Any,
+    ) -> List[Any]:
         """
         Find an image matching certain criteria.
 
@@ -1172,12 +1437,12 @@ class CobblerXMLRPCInterface:
 
     def find_mgmtclass(
         self,
-        criteria: Optional[dict] = None,
-        expand=False,
+        criteria: Optional[Dict[str, Any]] = None,
+        expand: bool = False,
         resolved: bool = False,
-        token=None,
-        **rest,
-    ):
+        token: Optional[str] = None,
+        **rest: Any,
+    ) -> List[Any]:
         """
         Find a management class matching certain criteria.
 
@@ -1193,12 +1458,12 @@ class CobblerXMLRPCInterface:
 
     def find_package(
         self,
-        criteria: Optional[dict] = None,
-        expand=False,
+        criteria: Optional[Dict[str, Any]] = None,
+        expand: bool = False,
         resolved: bool = False,
-        token=None,
-        **rest,
-    ):
+        token: Optional[str] = None,
+        **rest: Any,
+    ) -> List[Any]:
         """
         Find a package matching certain criteria.
 
@@ -1214,12 +1479,12 @@ class CobblerXMLRPCInterface:
 
     def find_file(
         self,
-        criteria: Optional[dict] = None,
-        expand=False,
+        criteria: Optional[Dict[str, Any]] = None,
+        expand: bool = False,
         resolved: bool = False,
-        token=None,
-        **rest,
-    ):
+        token: Optional[str] = None,
+        **rest: Any,
+    ) -> List[Any]:
         """
         Find a file matching certain criteria.
 
@@ -1235,12 +1500,12 @@ class CobblerXMLRPCInterface:
 
     def find_menu(
         self,
-        criteria: Optional[dict] = None,
-        expand=False,
+        criteria: Optional[Dict[str, Any]] = None,
+        expand: bool = False,
         resolved: bool = False,
-        token=None,
-        **rest,
-    ):
+        token: Optional[str] = None,
+        **rest: Any,
+    ) -> List[Any]:
         """
         Find a menu matching certain criteria.
 
@@ -1257,10 +1522,10 @@ class CobblerXMLRPCInterface:
     def find_items_paged(
         self,
         what: str,
-        criteria: Optional[dict] = None,
+        criteria: Optional[Dict[str, Any]] = None,
         sort_field: Optional[str] = None,
-        page=1,
-        items_per_page=25,
+        page: int = 1,
+        items_per_page: int = 25,
         resolved: bool = False,
         token: Optional[str] = None,
     ):
@@ -1286,9 +1551,9 @@ class CobblerXMLRPCInterface:
             items = self.api.get_items(what)
         else:
             items = self.api.find_items(what, criteria=criteria)
-        items = self.__sort(items, sort_field)
-        (items, pageinfo) = self.__paginate(items, page, items_per_page)
-        items = [x.to_dict(resolved=resolved) for x in items]
+        items = self.__sort(items, sort_field)  # type: ignore
+        (items, pageinfo) = self.__paginate(items, page, items_per_page)  # type: ignore
+        items = [x.to_dict(resolved=resolved) for x in items]  # type: ignore
         return self.xmlrpc_hacks({"items": items, "pageinfo": pageinfo})
 
     def has_item(self, what: str, name: str, token: Optional[str] = None):
@@ -1403,7 +1668,9 @@ class CobblerXMLRPCInterface:
         """
         return self.get_item_handle("menu", name)
 
-    def remove_item(self, what: str, name: str, token: str, recursive: bool = True):
+    def remove_item(
+        self, what: str, name: str, token: str, recursive: bool = True
+    ) -> bool:
         """
         Deletes an item from a collection.
         Note that this requires the name of the distro, not an item handle.
@@ -1418,7 +1685,9 @@ class CobblerXMLRPCInterface:
             f"remove_item ({what}, recursive={recursive})", name=name, token=token
         )
         obj = self.api.get_item(what, name)
-        self.check_access(token, f"remove_{what}", obj)
+        if obj is None:
+            return False
+        self.check_access(token, f"remove_{what}", obj.name)
         self.api.remove_item(
             what, name, delete=True, with_triggers=True, recursive=recursive
         )
@@ -1523,7 +1792,9 @@ class CobblerXMLRPCInterface:
         """
         return self.remove_item("menu", name, token, recursive)
 
-    def copy_item(self, what: str, object_id: str, newname: str, token: str):
+    def copy_item(
+        self, what: str, object_id: str, newname: str, token: Optional[str] = None
+    ):
         """
         Creates a new object that matches an existing object, as specified by an id.
 
@@ -1536,12 +1807,12 @@ class CobblerXMLRPCInterface:
         self._log(f"copy_item({what})", object_id=object_id, token=token)
         self.check_access(token, f"copy_{what}")
         obj = self.api.find_items(what, criteria={"uid": object_id}, return_list=False)
-        if obj is None:
+        if obj is None or isinstance(obj, list):
             raise ValueError(f'Item with id "{object_id}" not found.')
         self.api.copy_item(what, obj, newname)
         return True
 
-    def copy_distro(self, object_id: str, newname: str, token=None):
+    def copy_distro(self, object_id: str, newname: str, token: Optional[str] = None):
         """
         Copies a distribution and renames it afterwards.
 
@@ -1552,7 +1823,7 @@ class CobblerXMLRPCInterface:
         """
         return self.copy_item("distro", object_id, newname, token)
 
-    def copy_profile(self, object_id, newname, token=None):
+    def copy_profile(self, object_id: str, newname: str, token: Optional[str] = None):
         """
         Copies a profile and renames it afterwards.
 
@@ -1563,7 +1834,7 @@ class CobblerXMLRPCInterface:
         """
         return self.copy_item("profile", object_id, newname, token)
 
-    def copy_system(self, object_id, newname, token=None):
+    def copy_system(self, object_id: str, newname: str, token: Optional[str] = None):
         """
         Copies a system and renames it afterwards.
 
@@ -1574,7 +1845,7 @@ class CobblerXMLRPCInterface:
         """
         return self.copy_item("system", object_id, newname, token)
 
-    def copy_repo(self, object_id, newname, token=None):
+    def copy_repo(self, object_id: str, newname: str, token: Optional[str] = None):
         """
         Copies a repository and renames it afterwards.
 
@@ -1585,7 +1856,7 @@ class CobblerXMLRPCInterface:
         """
         return self.copy_item("repo", object_id, newname, token)
 
-    def copy_image(self, object_id, newname, token=None):
+    def copy_image(self, object_id: str, newname: str, token: Optional[str] = None):
         """
         Copies an image and renames it afterwards.
 
@@ -1596,7 +1867,7 @@ class CobblerXMLRPCInterface:
         """
         return self.copy_item("image", object_id, newname, token)
 
-    def copy_mgmtclass(self, object_id, newname, token=None):
+    def copy_mgmtclass(self, object_id: str, newname: str, token: Optional[str] = None):
         """
         Copies a management class and rename it afterwards.
 
@@ -1607,7 +1878,7 @@ class CobblerXMLRPCInterface:
         """
         return self.copy_item("mgmtclass", object_id, newname, token)
 
-    def copy_package(self, object_id, newname, token=None):
+    def copy_package(self, object_id: str, newname: str, token: Optional[str] = None):
         """
         Copies a package and rename it afterwards.
 
@@ -1618,7 +1889,7 @@ class CobblerXMLRPCInterface:
         """
         return self.copy_item("package", object_id, newname, token)
 
-    def copy_file(self, object_id, newname, token=None):
+    def copy_file(self, object_id: str, newname: str, token: Optional[str] = None):
         """
         Copies a file and rename it afterwards.
 
@@ -1629,7 +1900,7 @@ class CobblerXMLRPCInterface:
         """
         return self.copy_item("file", object_id, newname, token)
 
-    def copy_menu(self, object_id, newname, token=None):
+    def copy_menu(self, object_id: str, newname: str, token: Optional[str] = None):
         """
         Copies a menu and rename it afterwards.
 
@@ -1642,7 +1913,7 @@ class CobblerXMLRPCInterface:
 
     def rename_item(
         self, what: str, object_id: str, newname: str, token: Optional[str] = None
-    ):
+    ) -> bool:
         """
         Renames an object specified by object_id to a new name.
 
@@ -1653,14 +1924,18 @@ class CobblerXMLRPCInterface:
         :return: True if the action succeeded.
         """
         self._log(f"rename_item({what})", object_id=object_id, token=token)
+        if token is None:
+            raise ValueError('"token" must be provided to rename an item!')
         self.check_access(token, f"modify_{what}")
         obj = self.api.find_items(what, criteria={"uid": object_id}, return_list=False)
-        if obj is None:
+        if obj is None or isinstance(obj, list):
             raise ValueError(f'Item with id "{object_id}" not found!')
         self.api.rename_item(what, obj, newname)
         return True
 
-    def rename_distro(self, object_id: str, newname: str, token: Optional[str] = None):
+    def rename_distro(
+        self, object_id: str, newname: str, token: Optional[str] = None
+    ) -> bool:
         """
         Renames a distribution specified by object_id to a new name.
 
@@ -1671,7 +1946,9 @@ class CobblerXMLRPCInterface:
         """
         return self.rename_item("distro", object_id, newname, token)
 
-    def rename_profile(self, object_id: str, newname: str, token: Optional[str] = None):
+    def rename_profile(
+        self, object_id: str, newname: str, token: Optional[str] = None
+    ) -> bool:
         """
         Renames a profile specified by object_id to a new name.
 
@@ -1682,7 +1959,9 @@ class CobblerXMLRPCInterface:
         """
         return self.rename_item("profile", object_id, newname, token)
 
-    def rename_system(self, object_id: str, newname: str, token: Optional[str] = None):
+    def rename_system(
+        self, object_id: str, newname: str, token: Optional[str] = None
+    ) -> bool:
         """
         Renames a system specified by object_id to a new name.
 
@@ -1693,7 +1972,9 @@ class CobblerXMLRPCInterface:
         """
         return self.rename_item("system", object_id, newname, token)
 
-    def rename_repo(self, object_id: str, newname: str, token: Optional[str] = None):
+    def rename_repo(
+        self, object_id: str, newname: str, token: Optional[str] = None
+    ) -> bool:
         """
         Renames a repository specified by object_id to a new name.
 
@@ -1704,7 +1985,9 @@ class CobblerXMLRPCInterface:
         """
         return self.rename_item("repo", object_id, newname, token)
 
-    def rename_image(self, object_id: str, newname: str, token: Optional[str] = None):
+    def rename_image(
+        self, object_id: str, newname: str, token: Optional[str] = None
+    ) -> bool:
         """
         Renames an image specified by object_id to a new name.
 
@@ -1717,7 +2000,7 @@ class CobblerXMLRPCInterface:
 
     def rename_mgmtclass(
         self, object_id: str, newname: str, token: Optional[str] = None
-    ):
+    ) -> bool:
         """
         Renames a managementclass specified by object_id to a new name.
 
@@ -1728,7 +2011,9 @@ class CobblerXMLRPCInterface:
         """
         return self.rename_item("mgmtclass", object_id, newname, token)
 
-    def rename_package(self, object_id: str, newname: str, token: Optional[str] = None):
+    def rename_package(
+        self, object_id: str, newname: str, token: Optional[str] = None
+    ) -> bool:
         """
         Renames a package specified by object_id to a new name.
 
@@ -1739,7 +2024,9 @@ class CobblerXMLRPCInterface:
         """
         return self.rename_item("package", object_id, newname, token)
 
-    def rename_file(self, object_id: str, newname: str, token: Optional[str] = None):
+    def rename_file(
+        self, object_id: str, newname: str, token: Optional[str] = None
+    ) -> bool:
         """
         Renames a file specified by object_id to a new name.
 
@@ -1750,7 +2037,9 @@ class CobblerXMLRPCInterface:
         """
         return self.rename_item("file", object_id, newname, token)
 
-    def rename_menu(self, object_id: str, newname: str, token: Optional[str] = None):
+    def rename_menu(
+        self, object_id: str, newname: str, token: Optional[str] = None
+    ) -> bool:
         """
         Renames a menu specified by object_id to a new name.
 
@@ -1761,7 +2050,9 @@ class CobblerXMLRPCInterface:
         """
         return self.rename_item("menu", object_id, newname, token)
 
-    def new_item(self, what: str, token: str, is_subobject: bool = False):
+    def new_item(
+        self, what: str, token: str, is_subobject: bool = False, **kwargs: Any
+    ) -> str:
         """Creates a new (unconfigured) object, returning an object handle that can be used.
 
         Creates a new (unconfigured) object, returning an object handle that can be used with ``modify_*`` methods and
@@ -1775,7 +2066,7 @@ class CobblerXMLRPCInterface:
         """
         self._log(f"new_item({what})", token=token)
         self.check_access(token, f"new_{what}")
-        new_item = self.api.new_item(what, is_subobject)
+        new_item = self.api.new_item(what, is_subobject, **kwargs)
         self.unsaved_items[new_item.uid] = (time.time(), new_item)
         return new_item.uid
 
@@ -1869,7 +2160,14 @@ class CobblerXMLRPCInterface:
         """
         return self.new_item("menu", token)
 
-    def modify_item(self, what: str, object_id, attribute, arg, token: str) -> bool:
+    def modify_item(
+        self,
+        what: str,
+        object_id: str,
+        attribute: str,
+        arg: Union[str, int, float, List[str], Dict[str, Any]],
+        token: str,
+    ) -> bool:
         """
         Adjusts the value of a given field, specified by 'what' on a given object id. Allows modification of certain
         attributes on newly created or existing distro object handle.
@@ -1888,19 +2186,19 @@ class CobblerXMLRPCInterface:
             token=token,
         )
         obj = self.__get_object(object_id)
-        self.check_access(token, f"modify_{what}", obj, attribute)
+        self.check_access(token, f"modify_{what}", obj.name, attribute)
 
         if what == "system":
             if attribute == "modify_interface":
-                obj.modify_interface(arg)
+                obj.modify_interface(arg)  # type: ignore
                 return True
             if attribute == "delete_interface":
-                obj.delete_interface(arg)
+                obj.delete_interface(arg)  # type: ignore
                 return True
             if attribute == "rename_interface":
-                obj.rename_interface(
-                    old_name=arg.get("interface", ""),
-                    new_name=arg.get("rename_interface", ""),
+                obj.rename_interface(  # type: ignore
+                    old_name=arg.get("interface", ""),  # type: ignore
+                    new_name=arg.get("rename_interface", ""),  # type: ignore
                 )
                 return True
 
@@ -1909,7 +2207,7 @@ class CobblerXMLRPCInterface:
             return True
         return False
 
-    def modify_distro(self, object_id, attribute, arg, token: str):
+    def modify_distro(self, object_id: str, attribute: str, arg: Any, token: str):
         """
         Modify a single attribute of a distribution.
 
@@ -1921,7 +2219,7 @@ class CobblerXMLRPCInterface:
         """
         return self.modify_item("distro", object_id, attribute, arg, token)
 
-    def modify_profile(self, object_id, attribute, arg, token: str):
+    def modify_profile(self, object_id: str, attribute: str, arg: Any, token: str):
         """
         Modify a single attribute of a profile.
 
@@ -1933,7 +2231,7 @@ class CobblerXMLRPCInterface:
         """
         return self.modify_item("profile", object_id, attribute, arg, token)
 
-    def modify_system(self, object_id, attribute, arg, token: str):
+    def modify_system(self, object_id: str, attribute: str, arg: Any, token: str):
         """
         Modify a single attribute of a system.
 
@@ -1945,7 +2243,7 @@ class CobblerXMLRPCInterface:
         """
         return self.modify_item("system", object_id, attribute, arg, token)
 
-    def modify_image(self, object_id, attribute, arg, token: str):
+    def modify_image(self, object_id: str, attribute: str, arg: Any, token: str):
         """
         Modify a single attribute of an image.
 
@@ -1957,7 +2255,7 @@ class CobblerXMLRPCInterface:
         """
         return self.modify_item("image", object_id, attribute, arg, token)
 
-    def modify_repo(self, object_id, attribute, arg, token: str):
+    def modify_repo(self, object_id: str, attribute: str, arg: Any, token: str):
         """
         Modify a single attribute of a repository.
 
@@ -1969,7 +2267,7 @@ class CobblerXMLRPCInterface:
         """
         return self.modify_item("repo", object_id, attribute, arg, token)
 
-    def modify_mgmtclass(self, object_id, attribute, arg, token: str):
+    def modify_mgmtclass(self, object_id: str, attribute: str, arg: Any, token: str):
         """
         Modify a single attribute of a managementclass.
 
@@ -1981,7 +2279,7 @@ class CobblerXMLRPCInterface:
         """
         return self.modify_item("mgmtclass", object_id, attribute, arg, token)
 
-    def modify_package(self, object_id, attribute, arg, token: str):
+    def modify_package(self, object_id: str, attribute: str, arg: Any, token: str):
         """
         Modify a single attribute of a package.
 
@@ -1993,7 +2291,7 @@ class CobblerXMLRPCInterface:
         """
         return self.modify_item("package", object_id, attribute, arg, token)
 
-    def modify_file(self, object_id, attribute, arg, token: str):
+    def modify_file(self, object_id: str, attribute: str, arg: Any, token: str):
         """
         Modify a single attribute of a file.
 
@@ -2005,7 +2303,7 @@ class CobblerXMLRPCInterface:
         """
         return self.modify_item("file", object_id, attribute, arg, token)
 
-    def modify_menu(self, object_id, attribute, arg, token: str):
+    def modify_menu(self, object_id: str, attribute: str, arg: Any, token: str):
         """
         Modify a single attribute of a menu.
 
@@ -2047,15 +2345,15 @@ class CobblerXMLRPCInterface:
             if isinstance(getattr(self.api.settings(), setting_name), str):
                 value = str(value)
             elif isinstance(getattr(self.api.settings(), setting_name), bool):
-                value = self.api.input_boolean(value)
+                value = self.api.input_boolean(value)  # type: ignore
             elif isinstance(getattr(self.api.settings(), setting_name), int):
-                value = int(value)
+                value = int(value)  # type: ignore
             elif isinstance(getattr(self.api.settings(), setting_name), float):
-                value = float(value)
+                value = float(value)  # type: ignore
             elif isinstance(getattr(self.api.settings(), setting_name), list):
-                value = self.api.input_string_or_list_no_inherit(value)
+                value = self.api.input_string_or_list_no_inherit(value)  # type: ignore
             elif isinstance(getattr(self.api.settings(), setting_name), dict):
-                value = self.api.input_string_or_dict_no_inherit(value)
+                value = self.api.input_string_or_dict_no_inherit(value)  # type: ignore
             else:
                 self.logger.error(
                     "modify_setting(%s) - Wrong type for value", setting_name
@@ -2089,7 +2387,7 @@ class CobblerXMLRPCInterface:
         if field_name in ("interface", "delete_interface", "rename_interface"):
             return True
 
-        fields = []
+        fields: List[str] = []
         for key, value in system.NetworkInterface.__dict__.items():
             if isinstance(value, property):
                 fields.append(key)
@@ -2101,7 +2399,7 @@ class CobblerXMLRPCInterface:
         object_type: str,
         object_name: str,
         edit_type: str,
-        attributes: dict,
+        attributes: Dict[str, Union[str, int, float, List[str]]],
         token: str,
     ):
         """Extended API: New style object manipulations, 2.0 and later.
@@ -2127,7 +2425,8 @@ class CobblerXMLRPCInterface:
         handle = ""
         if edit_type in ("add", "rename"):
             if edit_type == "rename":
-                tmp_name = attributes["newname"]
+                # This is built by the CLI and thus we can be sure that this is the case!
+                tmp_name: str = attributes["newname"]  # type: ignore
             else:
                 tmp_name = object_name
             try:
@@ -2153,7 +2452,7 @@ class CobblerXMLRPCInterface:
             handle = self.get_item_handle(object_type, object_name)
 
         if edit_type == "rename":
-            self.rename_item(object_type, handle, attributes["newname"], token)
+            self.rename_item(object_type, handle, attributes["newname"], token)  # type: ignore
             # After we did the rename we don't want to do anything anymore. Saving the item is done during renaming.
             return True
 
@@ -2162,14 +2461,14 @@ class CobblerXMLRPCInterface:
             if is_subobject:
                 if "distro" in attributes:
                     raise ValueError("You can't change both 'parent' and 'distro'")
-                self.copy_item(object_type, handle, attributes["newname"], token)
-                handle = self.get_item_handle("profile", attributes["newname"])
+                self.copy_item(object_type, handle, attributes["newname"], token)  # type: ignore
+                handle = self.get_item_handle("profile", attributes["newname"])  # type: ignore
                 self.modify_item(
                     "profile", handle, "parent", attributes["parent"], token
                 )
             else:
-                self.copy_item(object_type, handle, attributes["newname"], token)
-                handle = self.get_item_handle(object_type, attributes["newname"])
+                self.copy_item(object_type, handle, attributes["newname"], token)  # type: ignore
+                handle = self.get_item_handle(object_type, attributes["newname"])  # type: ignore
 
         if edit_type in ["copy"]:
             del attributes["name"]
@@ -2200,16 +2499,20 @@ class CobblerXMLRPCInterface:
                         "params",
                     ] and attributes.get("in_place"):
                         details = self.get_item(object_type, object_name)
-                        new_value = details[key]
-                        parsed_input = self.api.input_string_or_dict(value)
-                        for (input_key, input_value) in list(parsed_input.items()):
-                            if input_key.startswith("~") and len(input_key) > 1:
-                                del new_value[input_key[1:]]
-                            else:
-                                new_value[input_key] = input_value
-                        value = new_value
+                        new_value = details[key]  # type: ignore
+                        parsed_input = self.api.input_string_or_dict(value)  # type: ignore
+                        if isinstance(parsed_input, dict):
+                            for (input_key, input_value) in parsed_input.items():
+                                if input_key.startswith("~") and len(input_key) > 1:
+                                    del new_value[input_key[1:]]  # type: ignore
+                                else:
+                                    new_value[input_key] = input_value  # type: ignore
+                        else:
+                            # If this is a str it MUST be the inherited case at this point.
+                            new_value = enums.VALUE_INHERITED
+                        value = new_value  # type: ignore
 
-                    self.modify_item(object_type, handle, key, value, token)
+                    self.modify_item(object_type, handle, key, value, token)  # type: ignore
 
             if object_type == "system" and have_interface_keys:
                 self.__interface_edits(handle, attributes, object_name)
@@ -2218,7 +2521,7 @@ class CobblerXMLRPCInterface:
             recursive = attributes.get("recursive", False)
             if object_type in ["profile", "menu"] and recursive is False:
                 childs = len(
-                    self.api.find_items(
+                    self.api.find_items(  # type: ignore
                         object_type, criteria={"parent": attributes["name"]}
                     )
                 )
@@ -2228,7 +2531,7 @@ class CobblerXMLRPCInterface:
                         " set to 'False'"
                     )
 
-            self.remove_item(object_type, object_name, token, recursive=recursive)
+            self.remove_item(object_type, object_name, token, recursive=recursive)  # type: ignore
             return True
 
         # FIXME: use the bypass flag or not?
@@ -2245,28 +2548,26 @@ class CobblerXMLRPCInterface:
         :param attributes: The attributes that are being passed by the CLI to the server.
         :param object_name: The system name.
         """
+        # This if is taking care of interface logic. The interfaces are a dict, thus when we get the obj via
+        # the api we get references to the original interfaces dict. Thus this trick saves us the pain of
+        # writing the modified obj back to the collection. Always remember that dicts are mutable.
+        system_to_edit: "system.System" = self.__get_object(handle)  # type: ignore
+        if system_to_edit is None:  # type: ignore
+            raise ValueError(
+                f'No system found with the specified name (name given: "{object_name}")!'
+            )
+
         if "delete_interface" in attributes:
             if attributes.get("interface") is None:
                 raise ValueError("Interface is required for deletion.")
-            system_to_edit = self.__get_object(handle)
-            system_to_edit.delete_interface(attributes.get("interface"))
+            system_to_edit.delete_interface(attributes.get("interface", ""))
             return
 
         if "rename_interface" in attributes:
-            system_to_edit = self.__get_object(handle)
             system_to_edit.rename_interface(
                 attributes.get("interface", ""), attributes.get("rename_interface", "")
             )
             return
-
-        # This if is taking care of interface logic. The interfaces are a dict, thus when we get the obj via
-        # the api we get references to the original interfaces dict. Thus this trick saves us the pain of
-        # writing the modified obj back to the collection. Always remember that dicts are mutable.
-        system_to_edit = self.__get_object(handle)
-        if system_to_edit is None:
-            raise ValueError(
-                f'No system found with the specified name (name given: "{object_name}")!'
-            )
 
         # If we don't have an explicit interface name use the default interface or require an explicit
         # interface if default cannot be found.
@@ -2299,7 +2600,9 @@ class CobblerXMLRPCInterface:
                 self.logger.debug("Field %s was not an interface field.", attribute_key)
         system_to_edit.interfaces.update({interface_name: interface})
 
-    def save_item(self, what: str, object_id: str, token, editmode: str = "bypass"):
+    def save_item(
+        self, what: str, object_id: str, token: str, editmode: str = "bypass"
+    ):
         """
         Saves a newly created or modified object to disk. Calling save is required for any changes to persist.
 
@@ -2312,7 +2615,7 @@ class CobblerXMLRPCInterface:
         """
         self._log(f"save_item({what})", object_id=object_id, token=token)
         obj = self.__get_object(object_id)
-        self.check_access(token, f"save_{what}", obj)
+        self.check_access(token, f"save_{what}", obj.name)
         if editmode == "new":
             self.api.add_item(what, obj, check_for_duplicate_names=True)
         else:
@@ -2321,7 +2624,7 @@ class CobblerXMLRPCInterface:
             del self.unsaved_items[object_id]
         return True
 
-    def save_distro(self, object_id, token, editmode: str = "bypass"):
+    def save_distro(self, object_id: str, token: str, editmode: str = "bypass"):
         """
         Saves a newly created or modified object to disk. Calling save is required for any changes to persist.
 
@@ -2333,7 +2636,7 @@ class CobblerXMLRPCInterface:
         """
         return self.save_item("distro", object_id, token, editmode=editmode)
 
-    def save_profile(self, object_id, token, editmode: str = "bypass"):
+    def save_profile(self, object_id: str, token: str, editmode: str = "bypass"):
         """
         Saves a newly created or modified object to disk. Calling save is required for any changes to persist.
 
@@ -2345,7 +2648,7 @@ class CobblerXMLRPCInterface:
         """
         return self.save_item("profile", object_id, token, editmode=editmode)
 
-    def save_system(self, object_id, token, editmode: str = "bypass"):
+    def save_system(self, object_id: str, token: str, editmode: str = "bypass"):
         """
         Saves a newly created or modified object to disk. Calling save is required for any changes to persist.
 
@@ -2357,7 +2660,7 @@ class CobblerXMLRPCInterface:
         """
         return self.save_item("system", object_id, token, editmode=editmode)
 
-    def save_image(self, object_id, token, editmode: str = "bypass"):
+    def save_image(self, object_id: str, token: str, editmode: str = "bypass"):
         """
         Saves a newly created or modified object to disk. Calling save is required for any changes to persist.
 
@@ -2369,7 +2672,7 @@ class CobblerXMLRPCInterface:
         """
         return self.save_item("image", object_id, token, editmode=editmode)
 
-    def save_repo(self, object_id, token, editmode: str = "bypass"):
+    def save_repo(self, object_id: str, token: str, editmode: str = "bypass"):
         """
         Saves a newly created or modified object to disk. Calling save is required for any changes to persist.
 
@@ -2381,7 +2684,7 @@ class CobblerXMLRPCInterface:
         """
         return self.save_item("repo", object_id, token, editmode=editmode)
 
-    def save_mgmtclass(self, object_id, token, editmode: str = "bypass"):
+    def save_mgmtclass(self, object_id: str, token: str, editmode: str = "bypass"):
         """
         Saves a newly created or modified object to disk. Calling save is required for any changes to persist.
 
@@ -2393,7 +2696,7 @@ class CobblerXMLRPCInterface:
         """
         return self.save_item("mgmtclass", object_id, token, editmode=editmode)
 
-    def save_package(self, object_id, token, editmode: str = "bypass"):
+    def save_package(self, object_id: str, token: str, editmode: str = "bypass"):
         """
         Saves a newly created or modified object to disk. Calling save is required for any changes to persist.
 
@@ -2405,7 +2708,7 @@ class CobblerXMLRPCInterface:
         """
         return self.save_item("package", object_id, token, editmode=editmode)
 
-    def save_file(self, object_id, token, editmode: str = "bypass"):
+    def save_file(self, object_id: str, token: str, editmode: str = "bypass"):
         """
         Saves a newly created or modified object to disk. Calling save is required for any changes to persist.
 
@@ -2417,7 +2720,7 @@ class CobblerXMLRPCInterface:
         """
         return self.save_item("file", object_id, token, editmode=editmode)
 
-    def save_menu(self, object_id, token, editmode="bypass"):
+    def save_menu(self, object_id: str, token: str, editmode: str = "bypass"):
         """
         Saves a newly created or modified object to disk. Calling save is required for any changes to persist.
 
@@ -2429,7 +2732,7 @@ class CobblerXMLRPCInterface:
         """
         return self.save_item("menu", object_id, token, editmode=editmode)
 
-    def get_autoinstall_templates(self, token=None, **rest):
+    def get_autoinstall_templates(self, token: Optional[str] = None, **rest: Any):
         """
         Returns all of the automatic OS installation templates that are in use by the system.
 
@@ -2441,7 +2744,7 @@ class CobblerXMLRPCInterface:
         # self.check_access(token, "get_autoinstall_templates")
         return self.autoinstall_mgr.get_autoinstall_templates()
 
-    def get_autoinstall_snippets(self, token=None, **rest):
+    def get_autoinstall_snippets(self, token: Optional[str] = None, **rest: Any):
         """
         Returns all the automatic OS installation templates' snippets.
 
@@ -2453,7 +2756,7 @@ class CobblerXMLRPCInterface:
         self._log("get_autoinstall_snippets", token=token)
         return self.autoinstall_mgr.get_autoinstall_snippets()
 
-    def is_autoinstall_in_use(self, ai, token=None, **rest):
+    def is_autoinstall_in_use(self, ai: str, token: Optional[str] = None, **rest: Any):
         """
         Check if the autoinstall for a system is in use.
 
@@ -2466,8 +2769,13 @@ class CobblerXMLRPCInterface:
         return self.autoinstall_mgr.is_autoinstall_in_use(ai)
 
     def generate_autoinstall(
-        self, profile=None, system=None, REMOTE_ADDR=None, REMOTE_MAC=None, **rest
-    ):
+        self,
+        profile: Optional[str] = None,
+        system: Optional[str] = None,
+        REMOTE_ADDR: Optional[Any] = None,
+        REMOTE_MAC: Optional[Any] = None,
+        **rest: Any,
+    ) -> str:
         """
         Generate the autoinstallation file and return it.
 
@@ -2489,7 +2797,7 @@ class CobblerXMLRPCInterface:
                 "correctly.\n# The cobbler.log should have information relating to this failure."
             )
 
-    def generate_profile_autoinstall(self, profile):
+    def generate_profile_autoinstall(self, profile: str):
         """
         Generate a profile autoinstallation.
 
@@ -2498,7 +2806,7 @@ class CobblerXMLRPCInterface:
         """
         return self.generate_autoinstall(profile=profile)
 
-    def generate_system_autoinstall(self, system):
+    def generate_system_autoinstall(self, system: str):
         """
         Generate a system autoinstallation.
 
@@ -2507,7 +2815,13 @@ class CobblerXMLRPCInterface:
         """
         return self.generate_autoinstall(system=system)
 
-    def generate_ipxe(self, profile=None, image=None, system=None, **rest) -> str:
+    def generate_ipxe(
+        self,
+        profile: Optional[str] = None,
+        image: Optional[str] = None,
+        system: Optional[str] = None,
+        **rest: Any,
+    ) -> str:
         """
         Generate the ipxe configuration.
 
@@ -2518,10 +2832,10 @@ class CobblerXMLRPCInterface:
         :return: The configuration as a str representation.
         """
         self._log("generate_ipxe")
-        return self.api.generate_ipxe(profile, image, system)
+        return self.api.generate_ipxe(profile, image, system)  # type: ignore
 
     def generate_bootcfg(
-        self, profile: Optional[str] = None, system: Optional[str] = None, **rest
+        self, profile: Optional[str] = None, system: Optional[str] = None, **rest: Any
     ) -> str:
         """
         This generates the bootcfg for a system which is related to a certain profile.
@@ -2532,7 +2846,9 @@ class CobblerXMLRPCInterface:
         :return: The generated bootcfg.
         """
         self._log("generate_bootcfg")
-        return self.api.generate_bootcfg(profile, system)
+        profile_name = "" if profile is None else profile
+        system_name = "" if system is None else system
+        return self.api.generate_bootcfg(profile_name, system_name)
 
     def generate_script(
         self,
@@ -2567,11 +2883,13 @@ class CobblerXMLRPCInterface:
         obj = self.api.find_items(
             "", {"uid": item_uuid}, return_list=False, no_errors=True
         )
-        if obj is None:
+        if obj is None or isinstance(obj, list):
             raise ValueError(f'Item with uuid "{item_uuid}" does not exist!')
         self.api.dump_vars(obj, formatted_output, remove_dicts)
 
-    def get_blended_data(self, profile=None, system=None):
+    def get_blended_data(
+        self, profile: Optional[str] = None, system: Optional[str] = None
+    ):
         """
         Combine all data which is available from a profile and system together and return it.
 
@@ -2584,18 +2902,18 @@ class CobblerXMLRPCInterface:
         """
         if profile is not None and profile != "":
             obj = self.api.find_profile(profile)
-            if obj is None:
+            if obj is None or isinstance(obj, list):
                 raise CX(f"profile not found: {profile}")
         elif system is not None and system != "":
             obj = self.api.find_system(system)
-            if obj is None:
+            if obj is None or isinstance(obj, list):
                 raise CX(f"system not found: {system}")
         else:
             raise CX("internal error, no system or profile specified")
         data = utils.blender(self.api, True, obj)
         return self.xmlrpc_hacks(data)
 
-    def get_settings(self, token=None, **rest) -> Dict[str, Any]:
+    def get_settings(self, token: Optional[str] = None, **rest: Any) -> Dict[str, Any]:
         """
         Return the contents of our settings file, which is a dict.
 
@@ -2606,9 +2924,11 @@ class CobblerXMLRPCInterface:
         # self._log("get_settings", token=token)
         results = self.api.settings().to_dict()
         # self._log("my settings are: %s" % results, debug=True)
-        return self.xmlrpc_hacks(results)
+        return self.xmlrpc_hacks(results)  # type: ignore
 
-    def get_signatures(self, token=None, **rest) -> dict:
+    def get_signatures(
+        self, token: Optional[str] = None, **rest: Any
+    ) -> Dict[Any, Any]:
         """
         Return the contents of the API signatures
 
@@ -2618,9 +2938,9 @@ class CobblerXMLRPCInterface:
         """
         self._log("get_signatures", token=token)
         results = self.api.get_signatures()
-        return self.xmlrpc_hacks(results)
+        return self.xmlrpc_hacks(results)  # type: ignore
 
-    def get_valid_breeds(self, token=None, **rest) -> list:
+    def get_valid_breeds(self, token: Optional[str] = None, **rest: Any) -> List[str]:
         """
         Return the list of valid breeds as read in from the distro signatures data
 
@@ -2631,9 +2951,11 @@ class CobblerXMLRPCInterface:
         self._log("get_valid_breeds", token=token)
         results = signatures.get_valid_breeds()
         results.sort()
-        return self.xmlrpc_hacks(results)
+        return self.xmlrpc_hacks(results)  # type: ignore
 
-    def get_valid_os_versions_for_breed(self, breed, token=None, **rest) -> list:
+    def get_valid_os_versions_for_breed(
+        self, breed: str, token: Optional[str] = None, **rest: Any
+    ) -> List[str]:
         """
         Return the list of valid os_versions for the given breed
 
@@ -2645,9 +2967,11 @@ class CobblerXMLRPCInterface:
         self._log("get_valid_os_versions_for_breed", token=token)
         results = signatures.get_valid_os_versions_for_breed(breed)
         results.sort()
-        return self.xmlrpc_hacks(results)
+        return self.xmlrpc_hacks(results)  # type: ignore
 
-    def get_valid_os_versions(self, token=None, **rest) -> list:
+    def get_valid_os_versions(
+        self, token: Optional[str] = None, **rest: Any
+    ) -> List[str]:
         """
         Return the list of valid os_versions as read in from the distro signatures data
 
@@ -2658,9 +2982,9 @@ class CobblerXMLRPCInterface:
         self._log("get_valid_os_versions", token=token)
         results = signatures.get_valid_os_versions()
         results.sort()
-        return self.xmlrpc_hacks(results)
+        return self.xmlrpc_hacks(results)  # type: ignore
 
-    def get_valid_archs(self, token=None) -> list:
+    def get_valid_archs(self, token: Optional[str] = None) -> List[str]:
         """
         Return the list of valid architectures as read in from the distro signatures data
 
@@ -2670,9 +2994,11 @@ class CobblerXMLRPCInterface:
         self._log("get_valid_archs", token=token)
         results = signatures.get_valid_archs()
         results.sort()
-        return self.xmlrpc_hacks(results)
+        return self.xmlrpc_hacks(results)  # type: ignore
 
-    def get_valid_distro_boot_loaders(self, distro_name: str, token=None):
+    def get_valid_distro_boot_loaders(
+        self, distro_name: Optional[str], token: Optional[str] = None
+    ):
         """
         Return the list of valid boot loaders for the distro
 
@@ -2684,11 +3010,13 @@ class CobblerXMLRPCInterface:
         if distro_name is None:
             return utils.get_supported_system_boot_loaders()
         obj = self.api.find_distro(distro_name)
-        if obj is None:
+        if obj is None or isinstance(obj, list):
             return f"# object not found: {distro_name}"
         return self.api.get_valid_obj_boot_loaders(obj)
 
-    def get_valid_image_boot_loaders(self, image_name: str, token=None):
+    def get_valid_image_boot_loaders(
+        self, image_name: Optional[str], token: Optional[str] = None
+    ):
         """
         Return the list of valid boot loaders for the image
 
@@ -2702,9 +3030,11 @@ class CobblerXMLRPCInterface:
         obj = self.api.find_image(image_name)
         if obj is None:
             return f"# object not found: {image_name}"
-        return self.api.get_valid_obj_boot_loaders(obj)
+        return self.api.get_valid_obj_boot_loaders(obj)  # type: ignore
 
-    def get_valid_profile_boot_loaders(self, profile_name, token=None):
+    def get_valid_profile_boot_loaders(
+        self, profile_name: Optional[str], token: Optional[str] = None
+    ):
         """
         Return the list of valid boot loaders for the profile
 
@@ -2716,12 +3046,14 @@ class CobblerXMLRPCInterface:
         if profile_name is None:
             return utils.get_supported_system_boot_loaders()
         obj = self.api.find_profile(profile_name)
-        if obj is None:
+        if obj is None or isinstance(obj, list):
             return f"# object not found: {profile_name}"
         distro = obj.get_conceptual_parent()
-        return self.api.get_valid_obj_boot_loaders(distro)
+        return self.api.get_valid_obj_boot_loaders(distro)  # type: ignore
 
-    def get_valid_system_boot_loaders(self, system_name: str, token=None) -> List[str]:
+    def get_valid_system_boot_loaders(
+        self, system_name: Optional[str], token: Optional[str] = None
+    ) -> List[str]:
         """
         Return the list of valid boot loaders for the system
 
@@ -2733,15 +3065,15 @@ class CobblerXMLRPCInterface:
         if system_name is None:
             return utils.get_supported_system_boot_loaders()
         obj = self.api.find_system(system_name)
-        if obj is None:
-            return f"# object not found: {system_name}"
+        if obj is None or isinstance(obj, list):
+            return [f"# object not found: {system_name}"]
         parent = obj.get_conceptual_parent()
 
         if parent and parent.COLLECTION_TYPE == "profile":
-            return parent.boot_loaders
-        return self.api.get_valid_obj_boot_loaders(parent)
+            return parent.boot_loaders  # type: ignore
+        return self.api.get_valid_obj_boot_loaders(parent)  # type: ignore
 
-    def get_repo_config_for_profile(self, profile_name, **rest):
+    def get_repo_config_for_profile(self, profile_name: str, **rest: Any):
         """
         Return the yum configuration a given profile should use to obtain all of it's Cobbler associated repos.
 
@@ -2750,11 +3082,11 @@ class CobblerXMLRPCInterface:
         :return: The repository configuration for the profile.
         """
         obj = self.api.find_profile(profile_name)
-        if obj is None:
+        if obj is None or isinstance(obj, list):
             return f"# object not found: {profile_name}"
         return self.api.get_repo_config_for_profile(obj)
 
-    def get_repo_config_for_system(self, system_name, **rest):
+    def get_repo_config_for_system(self, system_name: str, **rest: Any):
         """
         Return the yum configuration a given profile should use to obtain all of it's Cobbler associated repos.
 
@@ -2763,11 +3095,11 @@ class CobblerXMLRPCInterface:
         :return: The repository configuration for the system.
         """
         obj = self.api.find_system(system_name)
-        if obj is None:
+        if obj is None or isinstance(obj, list):
             return f"# object not found: {system_name}"
         return self.api.get_repo_config_for_system(obj)
 
-    def get_template_file_for_profile(self, profile_name, path, **rest):
+    def get_template_file_for_profile(self, profile_name: str, path: str, **rest: Any):
         """
         Return the templated file requested for this profile
 
@@ -2777,11 +3109,11 @@ class CobblerXMLRPCInterface:
         :return: The template file as a str representation.
         """
         obj = self.api.find_profile(profile_name)
-        if obj is None:
+        if obj is None or isinstance(obj, list):
             return f"# object not found: {profile_name}"
         return self.api.get_template_file_for_profile(obj, path)
 
-    def get_template_file_for_system(self, system_name, path, **rest):
+    def get_template_file_for_system(self, system_name: str, path: str, **rest: Any):
         """
         Return the templated file requested for this system
 
@@ -2791,11 +3123,13 @@ class CobblerXMLRPCInterface:
         :return: The template file as a str representation.
         """
         obj = self.api.find_system(system_name)
-        if obj is None:
+        if obj is None or isinstance(obj, list):
             return f"# object not found: {system_name}"
         return self.api.get_template_file_for_system(obj, path)
 
-    def register_new_system(self, info, token=None, **rest):
+    def register_new_system(
+        self, info: Dict[str, Any], token: Optional[str] = None, **rest: Any
+    ) -> int:
         """
         If register_new_installs is enabled in settings, this allows /usr/bin/cobbler-register (part of the koan
         package) to add new system records remotely if they don't already exist.
@@ -2870,17 +3204,25 @@ class CobblerXMLRPCInterface:
             if mac == "?":
                 # see koan/utils.py for explanation of network info discovery
                 continue
-            obj.set_mac_address(mac, iname)
+            obj.interfaces = {
+                iname: {
+                    "mac_address": mac,
+                    "ip_address": ip_address,
+                    "netmask": netmask,
+                }
+            }
             if hostname != "":
-                obj.set_dns_name(hostname, iname)
+                obj.hostname = hostname
             if ip_address not in ("", "?"):
-                obj.set_ip_address(ip_address, iname)
+                obj.interfaces[iname].ip_address = ip_address
             if netmask not in ("", "?"):
-                obj.set_netmask(netmask, iname)
+                obj.interfaces[iname].netmask = netmask
         self.api.add_system(obj)
         return 0
 
-    def disable_netboot(self, name, token=None, **rest) -> bool:
+    def disable_netboot(
+        self, name: str, token: Optional[str] = None, **rest: Any
+    ) -> bool:
         """
         This is a feature used by the ``pxe_just_once`` support, see manpage. Sets system named "name" to no-longer PXE.
         Disabled by default as this requires public API access and is technically a read-write operation.
@@ -2897,14 +3239,16 @@ class CobblerXMLRPCInterface:
             return False
         # triggers should be enabled when calling nopxe
         triggers_enabled = self.api.settings().nopxe_with_triggers
-        systems = self.api.systems()
-        obj = systems.find(name=name)
+        obj = self.api.systems().find(name=name)
         if obj is None:
             # system not found!
             return False
+        if isinstance(obj, list):
+            # Duplicate entries found - can't be but mypy requires this check
+            return False
         obj.netboot_enabled = False
         # disabling triggers and sync to make this extremely fast.
-        systems.add(
+        self.api.systems().add(
             obj,
             save=True,
             with_triggers=triggers_enabled,
@@ -2921,7 +3265,7 @@ class CobblerXMLRPCInterface:
         file: str,
         size: int,
         offset: int,
-        data: bytes,
+        data: "xmlrpc.client.Binary",
         token: Optional[str] = None,
     ) -> bool:
         """
@@ -2936,34 +3280,35 @@ class CobblerXMLRPCInterface:
         :param token: The API-token obtained via the login() method.
         :return: True if everything succeeded.
         """
+        if not self.api.settings().anamon_enabled:
+            # Feature disabled!
+            return False
+
         if not self.__validate_log_data_params(
-            sys_name, file, size, offset, data, token
+            sys_name, file, size, offset, data.data, token
         ):
             return False
+
         self._log(
             f"upload_log_data (file: '{file}', size: {size}, offset: {offset})",
             token=token,
             name=sys_name,
         )
 
-        # Check if enabled in self.api.settings()
-        if not self.api.settings().anamon_enabled:
-            # feature disabled!
-            return False
-
-        # Find matching system record
-
+        # Find matching system or profile record
         obj = self.api.find_system(name=sys_name)
-        if obj is None:
-            # system not found!
-            self._log(
-                f"upload_log_data - WARNING - system '{sys_name}' not found in Cobbler",
-                token=token,
-                name=sys_name,
-            )
-            return False
+        if obj is None or isinstance(obj, list):
+            obj = self.api.find_profile(name=sys_name)
+            if obj is None or isinstance(obj, list):
+                # system or profile not found!
+                self._log(
+                    "upload_log_data - WARNING - system or profile not found in Cobbler",
+                    token=token,
+                    name=sys_name,
+                )
+                return False
 
-        return self.__upload_file(obj.name, file, size, offset, data)
+        return self.__upload_file(obj.name, file, size, offset, data.data)
 
     def __validate_log_data_params(
         self,
@@ -2976,17 +3321,17 @@ class CobblerXMLRPCInterface:
     ) -> bool:
         # Validate all types
         if not (
-            isinstance(sys_name, str)
-            and isinstance(logfile_name, str)
-            and isinstance(size, int)
-            and isinstance(offset, int)
-            and isinstance(data, bytes)
+            isinstance(sys_name, str)  # type: ignore
+            and isinstance(logfile_name, str)  # type: ignore
+            and isinstance(size, int)  # type: ignore
+            and isinstance(offset, int)  # type: ignore
+            and isinstance(data, bytes)  # type: ignore
         ):
             self.logger.warning(
                 "upload_log_data - One of the parameters handed over had an invalid type!"
             )
             return False
-        if token is not None and not isinstance(token, str):
+        if token is not None and not isinstance(token, str):  # type: ignore
             self.logger.warning(
                 "upload_log_data - token was given but had an invalid type."
             )
@@ -3019,12 +3364,9 @@ class CobblerXMLRPCInterface:
         :param data: base64 encoded file contents
         :return: True if the action succeeded.
         """
-        contents = base64.decodebytes(data)
-        del data
         if offset != -1:
-            if size is not None:
-                if size != len(contents):
-                    return False
+            if size != len(data):
+                return False
 
         # FIXME: Get the base directory from Cobbler app-settings
         anamon_base_directory = "/var/log/cobbler/anamon"
@@ -3059,7 +3401,7 @@ class CobblerXMLRPCInterface:
         )
         # log_error("fd=%r" %fd)
         try:
-            if offset == 0 or (offset == -1 and size == len(contents)):
+            if offset == 0 or (offset == -1 and size == len(data)):
                 # truncate file
                 fcntl.lockf(uploaded_file_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 try:
@@ -3073,27 +3415,34 @@ class CobblerXMLRPCInterface:
                 os.lseek(uploaded_file_fd, offset, 0)
             # write contents
             fcntl.lockf(
-                uploaded_file_fd, fcntl.LOCK_EX | fcntl.LOCK_NB, len(contents), 0, 2
+                uploaded_file_fd, fcntl.LOCK_EX | fcntl.LOCK_NB, len(data), 0, 2
             )
             try:
-                os.write(uploaded_file_fd, contents)
+                os.write(uploaded_file_fd, data)
                 # log_error("wrote contents")
             finally:
-                fcntl.lockf(uploaded_file_fd, fcntl.LOCK_UN, len(contents), 0, 2)
+                fcntl.lockf(uploaded_file_fd, fcntl.LOCK_UN, len(data), 0, 2)
             if offset == -1:
-                if size is not None:
-                    # truncate file
-                    fcntl.lockf(uploaded_file_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    try:
-                        os.ftruncate(uploaded_file_fd, size)
-                        # log_error("truncating fd %r to size %r" % (fd,size))
-                    finally:
-                        fcntl.lockf(uploaded_file_fd, fcntl.LOCK_UN)
+                # truncate file
+                fcntl.lockf(uploaded_file_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                try:
+                    os.ftruncate(uploaded_file_fd, size)
+                    # log_error("truncating fd %r to size %r" % (fd,size))
+                finally:
+                    fcntl.lockf(uploaded_file_fd, fcntl.LOCK_UN)
         finally:
             os.close(uploaded_file_fd)
         return True
 
-    def run_install_triggers(self, mode, objtype, name, ip, token=None, **rest):
+    def run_install_triggers(
+        self,
+        mode: str,
+        objtype: str,
+        name: str,
+        ip: str,
+        token: Optional[str] = None,
+        **rest: Any,
+    ):
         """
         This is a feature used to run the pre/post install triggers.
         See CobblerTriggers on Wiki for details
@@ -3124,7 +3473,7 @@ class CobblerXMLRPCInterface:
         )
         return True
 
-    def version(self, token=None, **rest):
+    def version(self, token: Optional[str] = None, **rest: Any):
         """
         Return the Cobbler version for compatibility testing with remote applications.
         See api.py for documentation.
@@ -3136,7 +3485,9 @@ class CobblerXMLRPCInterface:
         self._log("version", token=token)
         return self.api.version()
 
-    def extended_version(self, token=None, **rest):
+    def extended_version(
+        self, token: Optional[str] = None, **rest: Any
+    ) -> Dict[str, Union[str, List[str]]]:
         """
         Returns the full dictionary of version information.  See api.py for documentation.
 
@@ -3145,9 +3496,11 @@ class CobblerXMLRPCInterface:
         :return: The extended version of Cobbler
         """
         self._log("version", token=token)
-        return self.api.version(extended=True)
+        return self.api.version(extended=True)  # type: ignore
 
-    def get_distros_since(self, mtime: float):
+    def get_distros_since(
+        self, mtime: float
+    ) -> Union[List[Any], Dict[Any, Any], int, str, float]:
         """
         Return all of the distro objects that have been modified after mtime.
 
@@ -3157,7 +3510,9 @@ class CobblerXMLRPCInterface:
         data = self.api.get_distros_since(mtime, collapse=True)
         return self.xmlrpc_hacks(data)
 
-    def get_profiles_since(self, mtime: float):
+    def get_profiles_since(
+        self, mtime: float
+    ) -> Union[List[Any], Dict[Any, Any], int, str, float]:
         """
         See documentation for get_distros_since
 
@@ -3167,7 +3522,9 @@ class CobblerXMLRPCInterface:
         data = self.api.get_profiles_since(mtime, collapse=True)
         return self.xmlrpc_hacks(data)
 
-    def get_systems_since(self, mtime: float):
+    def get_systems_since(
+        self, mtime: float
+    ) -> Union[List[Any], Dict[Any, Any], int, str, float]:
         """
         See documentation for get_distros_since
 
@@ -3177,7 +3534,9 @@ class CobblerXMLRPCInterface:
         data = self.api.get_systems_since(mtime, collapse=True)
         return self.xmlrpc_hacks(data)
 
-    def get_repos_since(self, mtime: float):
+    def get_repos_since(
+        self, mtime: float
+    ) -> Union[List[Any], Dict[Any, Any], int, str, float]:
         """
         See documentation for get_distros_since
 
@@ -3187,7 +3546,9 @@ class CobblerXMLRPCInterface:
         data = self.api.get_repos_since(mtime, collapse=True)
         return self.xmlrpc_hacks(data)
 
-    def get_images_since(self, mtime: float):
+    def get_images_since(
+        self, mtime: float
+    ) -> Union[List[Any], Dict[Any, Any], int, str, float]:
         """
         See documentation for get_distros_since
 
@@ -3197,7 +3558,9 @@ class CobblerXMLRPCInterface:
         data = self.api.get_images_since(mtime, collapse=True)
         return self.xmlrpc_hacks(data)
 
-    def get_mgmtclasses_since(self, mtime: float):
+    def get_mgmtclasses_since(
+        self, mtime: float
+    ) -> Union[List[Any], Dict[Any, Any], int, str, float]:
         """
         See documentation for get_distros_since
 
@@ -3207,7 +3570,9 @@ class CobblerXMLRPCInterface:
         data = self.api.get_mgmtclasses_since(mtime, collapse=True)
         return self.xmlrpc_hacks(data)
 
-    def get_packages_since(self, mtime: float):
+    def get_packages_since(
+        self, mtime: float
+    ) -> Union[List[Any], Dict[Any, Any], int, str, float]:
         """
         See documentation for get_distros_since
 
@@ -3217,7 +3582,9 @@ class CobblerXMLRPCInterface:
         data = self.api.get_packages_since(mtime, collapse=True)
         return self.xmlrpc_hacks(data)
 
-    def get_files_since(self, mtime: float):
+    def get_files_since(
+        self, mtime: float
+    ) -> Union[List[Any], Dict[Any, Any], int, str, float]:
         """
         See documentation for get_distros_since
 
@@ -3227,7 +3594,9 @@ class CobblerXMLRPCInterface:
         data = self.api.get_files_since(mtime, collapse=True)
         return self.xmlrpc_hacks(data)
 
-    def get_menus_since(self, mtime: float):
+    def get_menus_since(
+        self, mtime: float
+    ) -> Union[List[Any], Dict[Any, Any], int, str, float]:
         """
         See documentation for get_distros_since
 
@@ -3238,8 +3607,8 @@ class CobblerXMLRPCInterface:
         return self.xmlrpc_hacks(data)
 
     def get_repos_compatible_with_profile(
-        self, profile=None, token=None, **rest
-    ) -> list:
+        self, profile: str, token: Optional[str] = None, **rest: Any
+    ) -> List[Dict[Any, Any]]:
         """
         Get repos that can be used with a given profile name.
 
@@ -3249,22 +3618,24 @@ class CobblerXMLRPCInterface:
         :return: The list of compatible repositories.
         """
         self._log("get_repos_compatible_with_profile", token=token)
-        profile = self.api.find_profile(profile)
-        if profile is None:
+        profile_obj = self.api.find_profile(profile)
+        if profile_obj is None or isinstance(profile_obj, list):
             self.logger.info(
                 'The profile name supplied ("%s") for get_repos_compatible_with_profile was not'
                 "existing",
                 profile,
             )
             return []
-        results = []
-        distro = profile.get_conceptual_parent()
+        results: List[Dict[Any, Any]] = []
+        distro: Optional["Distro"] = profile_obj.get_conceptual_parent()  # type: ignore
+        if distro is None:
+            raise ValueError("Distro not found!")
         for current_repo in self.api.repos():
             # There be dragons!
             # Accept all repos that are src/noarch but otherwise filter what repos are compatible with the profile based
             # on the arch of the distro.
             # FIXME: Use the enum directly
-            if current_repo.arch is None or current_repo.arch.value in [
+            if current_repo.arch.value in [
                 "",
                 "noarch",
                 "src",
@@ -3281,11 +3652,11 @@ class CobblerXMLRPCInterface:
                     if distro.arch.value in ["x86_64"]:
                         results.append(current_repo.to_dict())
                 else:
-                    if distro.arch == current_repo.arch:
+                    if distro.arch.value == current_repo.arch.value:
                         results.append(current_repo.to_dict())
         return results
 
-    def find_system_by_dns_name(self, dns_name):
+    def find_system_by_dns_name(self, dns_name: str) -> Dict[str, Any]:
         """
         This is used by the puppet external nodes feature.
 
@@ -3295,11 +3666,13 @@ class CobblerXMLRPCInterface:
         # FIXME: expose generic finds for other methods
         # WARNING: this function is /not/ expected to stay in Cobbler long term
         system = self.api.find_system(dns_name=dns_name)
-        if system is None:
+        if system is None or isinstance(system, list):
             return {}
-        return self.get_system_as_rendered(system.name)
+        return self.get_system_as_rendered(system.name)  # type: ignore
 
-    def get_distro_as_rendered(self, name: str, token: Optional[str] = None, **rest):
+    def get_distro_as_rendered(
+        self, name: str, token: Optional[str] = None, **rest: Any
+    ) -> Union[List[Any], Dict[Any, Any], int, str, float]:
         """
         Get distribution after passing through Cobbler's inheritance engine.
 
@@ -3311,11 +3684,13 @@ class CobblerXMLRPCInterface:
 
         self._log("get_distro_as_rendered", name=name, token=token)
         obj = self.api.find_distro(name=name)
-        if obj is not None:
+        if obj is not None and not isinstance(obj, list):
             return self.xmlrpc_hacks(utils.blender(self.api, True, obj))
         return self.xmlrpc_hacks({})
 
-    def get_profile_as_rendered(self, name: str, token: Optional[str] = None, **rest):
+    def get_profile_as_rendered(
+        self, name: str, token: Optional[str] = None, **rest: Any
+    ) -> Union[List[Any], Dict[Any, Any], int, str, float]:
         """
         Get profile after passing through Cobbler's inheritance engine.
 
@@ -3327,11 +3702,13 @@ class CobblerXMLRPCInterface:
 
         self._log("get_profile_as_rendered", name=name, token=token)
         obj = self.api.find_profile(name=name)
-        if obj is not None:
+        if obj is not None and not isinstance(obj, list):
             return self.xmlrpc_hacks(utils.blender(self.api, True, obj))
         return self.xmlrpc_hacks({})
 
-    def get_system_as_rendered(self, name: str, token: Optional[str] = None, **rest):
+    def get_system_as_rendered(
+        self, name: str, token: Optional[str] = None, **rest: Any
+    ) -> Union[List[Any], Dict[Any, Any], int, str, float]:
         """
         Get profile after passing through Cobbler's inheritance engine.
 
@@ -3343,20 +3720,24 @@ class CobblerXMLRPCInterface:
 
         self._log("get_system_as_rendered", name=name, token=token)
         obj = self.api.find_system(name=name)
-        if obj is not None:
+        if obj is not None and not isinstance(obj, list):
             _dict = utils.blender(self.api, True, obj)
             # Generate a pxelinux.cfg?
             image_based = False
-            profile = obj.get_conceptual_parent()
-            distro = profile.get_conceptual_parent()
+            profile: Optional[Union["Profile", "Image"]] = obj.get_conceptual_parent()  # type: ignore
+            if profile is None:
+                raise ValueError("Profile not found!")
+            distro: Optional["Distro"] = profile.get_conceptual_parent()  # type: ignore
 
             # The management classes stored in the system are just a list of names, so we need to turn it into a full
             # list of dictionaries (right now we just use the params field).
             management_classes = _dict["mgmt_classes"]
             _dict["mgmt_classes"] = {}
             for management_class in management_classes:
-                class_obj = self.api.find_mgmtclass(name=management_class)
-                if class_obj:
+                class_obj = self.api.find_mgmtclass(
+                    name=management_class, return_list=False
+                )
+                if class_obj and not isinstance(class_obj, list):
                     _dict["mgmt_classes"][management_class] = class_obj.to_dict()
 
             arch = None
@@ -3364,22 +3745,24 @@ class CobblerXMLRPCInterface:
                 image_based = True
                 arch = profile.arch
             else:
-                arch = distro.arch
+                arch = distro.arch  # type: ignore
 
             if obj.is_management_supported():
                 if not image_based:
                     _dict["pxelinux.cfg"] = self.tftpgen.write_pxe_file(
-                        None, obj, profile, distro, arch
+                        None, obj, profile, distro, arch  # type: ignore
                     )
                 else:
                     _dict["pxelinux.cfg"] = self.tftpgen.write_pxe_file(
-                        None, obj, None, None, arch, image=profile
+                        None, obj, None, None, arch, image=profile  # type: ignore
                     )
 
             return self.xmlrpc_hacks(_dict)
         return self.xmlrpc_hacks({})
 
-    def get_repo_as_rendered(self, name: str, token: Optional[str] = None, **rest):
+    def get_repo_as_rendered(
+        self, name: str, token: Optional[str] = None, **rest: Any
+    ) -> Union[List[Any], Dict[Any, Any], int, str, float]:
         """
         Get repository after passing through Cobbler's inheritance engine.
 
@@ -3391,11 +3774,13 @@ class CobblerXMLRPCInterface:
 
         self._log("get_repo_as_rendered", name=name, token=token)
         obj = self.api.find_repo(name=name)
-        if obj is not None:
+        if obj is not None and not isinstance(obj, list):
             return self.xmlrpc_hacks(utils.blender(self.api, True, obj))
         return self.xmlrpc_hacks({})
 
-    def get_image_as_rendered(self, name: str, token: Optional[str] = None, **rest):
+    def get_image_as_rendered(
+        self, name: str, token: Optional[str] = None, **rest: Any
+    ) -> Union[List[Any], Dict[Any, Any], int, str, float]:
         """
         Get repository after passing through Cobbler's inheritance engine.
 
@@ -3407,11 +3792,13 @@ class CobblerXMLRPCInterface:
 
         self._log("get_image_as_rendered", name=name, token=token)
         obj = self.api.find_image(name=name)
-        if obj is not None:
+        if obj is not None and not isinstance(obj, list):
             return self.xmlrpc_hacks(utils.blender(self.api, True, obj))
         return self.xmlrpc_hacks({})
 
-    def get_mgmtclass_as_rendered(self, name: str, token: Optional[str] = None, **rest):
+    def get_mgmtclass_as_rendered(
+        self, name: str, token: Optional[str] = None, **rest: Any
+    ) -> Union[List[Any], Dict[Any, Any], int, str, float]:
         """
         Get management class after passing through Cobbler's inheritance engine
 
@@ -3423,11 +3810,13 @@ class CobblerXMLRPCInterface:
 
         self._log("get_mgmtclass_as_rendered", name=name, token=token)
         obj = self.api.find_mgmtclass(name=name)
-        if obj is not None:
+        if obj is not None and not isinstance(obj, list):
             return self.xmlrpc_hacks(utils.blender(self.api, True, obj))
         return self.xmlrpc_hacks({})
 
-    def get_package_as_rendered(self, name: str, token: Optional[str] = None, **rest):
+    def get_package_as_rendered(
+        self, name: str, token: Optional[str] = None, **rest: Any
+    ) -> Union[List[Any], Dict[Any, Any], int, str, float]:
         """
         Get package after passing through Cobbler's inheritance engine
 
@@ -3439,11 +3828,13 @@ class CobblerXMLRPCInterface:
 
         self._log("get_package_as_rendered", name=name, token=token)
         obj = self.api.find_package(name=name)
-        if obj is not None:
+        if obj is not None and not isinstance(obj, list):
             return self.xmlrpc_hacks(utils.blender(self.api, True, obj))
         return self.xmlrpc_hacks({})
 
-    def get_file_as_rendered(self, name: str, token: Optional[str] = None, **rest):
+    def get_file_as_rendered(
+        self, name: str, token: Optional[str] = None, **rest: Any
+    ) -> Union[List[Any], Dict[Any, Any], int, str, float]:
         """
         Get file after passing through Cobbler's inheritance engine
 
@@ -3455,11 +3846,13 @@ class CobblerXMLRPCInterface:
 
         self._log("get_file_as_rendered", name=name, token=token)
         obj = self.api.find_file(name=name)
-        if obj is not None:
+        if obj is not None and not isinstance(obj, list):
             return self.xmlrpc_hacks(utils.blender(self.api, True, obj))
         return self.xmlrpc_hacks({})
 
-    def get_menu_as_rendered(self, name: str, token: Optional[str] = None, **rest):
+    def get_menu_as_rendered(
+        self, name: str, token: Optional[str] = None, **rest: Any
+    ) -> Union[List[Any], Dict[Any, Any], int, str, float]:
         """
         Get menu after passing through Cobbler's inheritance engine
 
@@ -3471,11 +3864,13 @@ class CobblerXMLRPCInterface:
 
         self._log("get_menu_as_rendered", name=name, token=token)
         obj = self.api.find_menu(name=name)
-        if obj is not None:
+        if obj is not None and not isinstance(obj, list):
             return self.xmlrpc_hacks(utils.blender(self.api, True, obj))
         return self.xmlrpc_hacks({})
 
-    def get_random_mac(self, virt_type="xenpv", token=None, **rest):
+    def get_random_mac(
+        self, virt_type: str = "xenpv", token: Optional[str] = None, **rest: Any
+    ) -> str:
         """
         Wrapper for ``utils.get_random_mac()``. Used in the webui.
 
@@ -3488,7 +3883,9 @@ class CobblerXMLRPCInterface:
         self._log("get_random_mac", token=None)
         return utils.get_random_mac(self.api, virt_type)
 
-    def xmlrpc_hacks(self, data):
+    def xmlrpc_hacks(
+        self, data: Optional[Union[List[Any], Dict[Any, Any], int, str, float]]
+    ) -> Union[List[Any], Dict[Any, Any], int, str, float]:
         """
         Convert None in XMLRPC to just '~' to make extra sure a client that can't allow_none can deal with this.
 
@@ -3499,7 +3896,9 @@ class CobblerXMLRPCInterface:
         """
         return utils.strip_none(data)
 
-    def get_status(self, mode="normal", token=None, **rest):
+    def get_status(
+        self, mode: str = "normal", token: Optional[str] = None, **rest: Any
+    ) -> Union[Dict[Any, Any], str]:
         """
         Returns the same information as `cobbler status`
         While a read-only operation, this requires a token because it's potentially a fair amount of I/O
@@ -3534,7 +3933,7 @@ class CobblerXMLRPCInterface:
         return b64
 
     @staticmethod
-    def __is_token(token: str) -> bool:
+    def __is_token(token: Optional[str]) -> bool:
         """
         Simple check to validate if it is a token.
 
@@ -3547,7 +3946,7 @@ class CobblerXMLRPCInterface:
         """
         return isinstance(token, str) and len(token) == 36
 
-    def __invalidate_expired_tokens(self):
+    def __invalidate_expired_tokens(self) -> None:
         """
         Deletes any login tokens that might have expired. Also removes expired events.
         """
@@ -3563,8 +3962,8 @@ class CobblerXMLRPCInterface:
             if timenow > tokentime + CACHE_TIMEOUT:
                 del self.unsaved_items[oid]
         for tid in list(self.events.keys()):
-            (eventtime, _, _, _) = self.events[tid]
-            if timenow > eventtime + EVENT_TIMEOUT:
+            event = self.events[tid]
+            if timenow > event.statetime + float(EVENT_TIMEOUT):
                 del self.events[tid]
             # logfile cleanup should be dealt w/ by logrotate
 
@@ -3580,7 +3979,7 @@ class CobblerXMLRPCInterface:
         """
         return self.api.authenticate(input_user, input_password)
 
-    def __validate_token(self, token: str) -> bool:
+    def __validate_token(self, token: Optional[str]) -> bool:
         """
         Checks to see if an API method can be called when the given token is passed in. Updates the timestamp of the
         token automatically to prevent the need to repeatedly call login(). Any method that needs access control should
@@ -3601,26 +4000,31 @@ class CobblerXMLRPCInterface:
         self._log("invalid token", token=token)
         return False
 
-    def __name_to_object(self, resource, name):
+    def __name_to_object(self, resource: str, name: str) -> Optional["ITEM"]:  # type: ignore
+        result: Optional["ITEM"] = None
         if resource.find("distro") != -1:
-            return self.api.find_distro(name)
+            result = self.api.find_distro(name, return_list=False)  # type: ignore
         if resource.find("profile") != -1:
-            return self.api.find_profile(name)
+            result = self.api.find_profile(name, return_list=False)  # type: ignore
         if resource.find("system") != -1:
-            return self.api.find_system(name)
+            result = self.api.find_system(name, return_list=False)  # type: ignore
         if resource.find("repo") != -1:
-            return self.api.find_repo(name)
+            result = self.api.find_repo(name, return_list=False)  # type: ignore
         if resource.find("mgmtclass") != -1:
-            return self.api.find_mgmtclass(name)
+            result = self.api.find_mgmtclass(name, return_list=False)  # type: ignore
         if resource.find("package") != -1:
-            return self.api.find_package(name)
+            result = self.api.find_package(name, return_list=False)  # type: ignore
         if resource.find("file") != -1:
-            return self.api.find_file(name)
+            result = self.api.find_file(name, return_list=False)  # type: ignore
         if resource.find("menu") != -1:
-            return self.api.find_menu(name)
-        return None
+            result = self.api.find_menu(name, return_list=False)  # type: ignore
+        if isinstance(result, list):
+            raise ValueError("Search is not allowed to return list!")
+        return result
 
-    def check_access_no_fail(self, token, resource, arg1=None, arg2=None) -> int:
+    def check_access_no_fail(
+        self, token: str, resource: str, arg1: Optional[str] = None, arg2: Any = None
+    ) -> int:
         """
         This is called by the WUI to decide whether an element is editable or not. It differs form check_access in that
         it is supposed to /not/ log the access checks (TBA) and does not raise exceptions.
@@ -3649,7 +4053,7 @@ class CobblerXMLRPCInterface:
 
         if need_remap:
             # we're called with an object name, but need an object
-            arg1 = self.__name_to_object(resource, arg1)
+            arg1 = self.__name_to_object(resource, arg1)  # type: ignore
 
         try:
             self.check_access(token, resource, arg1, arg2)
@@ -3658,7 +4062,13 @@ class CobblerXMLRPCInterface:
             utils.log_exc()
             return 0
 
-    def check_access(self, token: str, resource: str, arg1=None, arg2=None) -> int:
+    def check_access(
+        self,
+        token: Optional[str],
+        resource: str,
+        arg1: Optional[str] = None,
+        arg2: Any = None,
+    ) -> int:
         """
         Check if the token which was provided has access.
 
@@ -3706,14 +4116,14 @@ class CobblerXMLRPCInterface:
         if login_user == "":
             if login_password == self.shared_secret:
                 return self.__make_token("<DIRECT>")
-            utils.die("login failed")
+            raise ValueError("login failed due to missing username!")
 
         # This should not log to disk OR make events as we're going to call it like crazy in CobblerWeb. Just failed
         # attempts.
         if self.__validate_user(login_user, login_password):
             token = self.__make_token(login_user)
             return token
-        utils.die(f"login failed ({login_user})")
+        raise ValueError(f"login failed ({login_user})")
 
     def logout(self, token: str) -> bool:
         """
@@ -3737,7 +4147,7 @@ class CobblerXMLRPCInterface:
         """
         return self.__validate_token(token)
 
-    def sync_dhcp(self, token: str):
+    def sync_dhcp(self, token: str) -> bool:
         """
         Run sync code, which should complete before XMLRPC timeout. We can't do reposync this way. Would be nice to
         send output over AJAX/other later.
@@ -3750,7 +4160,7 @@ class CobblerXMLRPCInterface:
         self.api.sync_dhcp()
         return True
 
-    def sync(self, token: str):
+    def sync(self, token: str) -> bool:
         """
         Run sync code, which should complete before XMLRPC timeout. We can't do reposync this way. Would be nice to
         send output over AJAX/other later.
@@ -3778,7 +4188,7 @@ class CobblerXMLRPCInterface:
 
         return self.autoinstall_mgr.read_autoinstall_template(file_path)
 
-    def write_autoinstall_template(self, file_path: str, data: str, token: str):
+    def write_autoinstall_template(self, file_path: str, data: str, token: str) -> bool:
         """
         Write an automatic OS installation template file
 
@@ -3796,7 +4206,7 @@ class CobblerXMLRPCInterface:
 
         return True
 
-    def remove_autoinstall_template(self, file_path: str, token: str):
+    def remove_autoinstall_template(self, file_path: str, token: str) -> bool:
         """
         Remove an automatic OS installation template file
 
@@ -3844,7 +4254,7 @@ class CobblerXMLRPCInterface:
 
         return True
 
-    def remove_autoinstall_snippet(self, file_path: str, token: str):
+    def remove_autoinstall_snippet(self, file_path: str, token: str) -> bool:
         """
         Remove an automated OS installation snippet file
 
@@ -3872,7 +4282,7 @@ class CobblerXMLRPCInterface:
         obj = configgen.ConfigGen(self.api, hostname)
         return obj.gen_config_data_for_koan()
 
-    def clear_system_logs(self, object_id: str, token: str):
+    def clear_system_logs(self, object_id: str, token: str) -> bool:
         """
         clears console logs of a system
 
@@ -3880,38 +4290,47 @@ class CobblerXMLRPCInterface:
         :param token: The API-token obtained via the login() method.
         :return: True if the operation succeeds.
         """
-        obj = self.api.find_items(criteria={"uid": object_id}, return_list=False)
-        self.check_access(token, "clear_system_logs", obj)
+        # We pass return_list=False, thus the return type is Optional[System]
+        obj: Optional["system.System"] = self.api.find_system(uid=object_id, return_list=False)  # type: ignore
+        self.check_access(
+            token, "clear_system_logs", obj.name if obj else "object not found"
+        )
+        if obj is None:
+            return False
         self.api.clear_logs(obj)
         return True
 
     def input_string_or_list_no_inherit(
-        self, options: Optional[Union[str, list]]
-    ) -> list:
+        self, options: Optional[Union[str, List[Any]]]
+    ) -> List[Any]:
         """
         .. seealso:: :func:`~cobbler.api.CobblerAPI.input_string_or_list_no_inherit`
         """
         return self.api.input_string_or_list_no_inherit(options)
 
     def input_string_or_list(
-        self, options: Optional[Union[str, list]]
-    ) -> Union[list, str]:
+        self, options: Optional[Union[str, List[Any]]]
+    ) -> Union[List[Any], str]:
         """
         .. seealso:: :func:`~cobbler.api.CobblerAPI.input_string_or_list`
         """
         return self.api.input_string_or_list(options)
 
     def input_string_or_dict(
-        self, options: Union[str, list, dict], allow_multiples=True
-    ) -> Union[str, dict]:
+        self,
+        options: Union[str, List[Any], Dict[Any, Any]],
+        allow_multiples: bool = True,
+    ) -> Union[str, Dict[Any, Any]]:
         """
         .. seealso:: :func:`~cobbler.api.CobblerAPI.input_string_or_dict`
         """
         return self.api.input_string_or_dict(options, allow_multiples=allow_multiples)
 
     def input_string_or_dict_no_inherit(
-        self, options: Union[str, list, dict], allow_multiples=True
-    ) -> dict:
+        self,
+        options: Union[str, List[Any], Dict[Any, Any]],
+        allow_multiples: bool = True,
+    ) -> Dict[Any, Any]:
         """
         .. seealso:: :func:`~cobbler.api.CobblerAPI.input_string_or_dict_no_inherit`
         """
@@ -3940,7 +4359,7 @@ class RequestHandler(SimpleXMLRPCRequestHandler):
     TODO
     """
 
-    def do_OPTIONS(self):
+    def do_OPTIONS(self) -> None:
         """
         TODO
         """
@@ -3948,7 +4367,7 @@ class RequestHandler(SimpleXMLRPCRequestHandler):
         self.end_headers()
 
     # Add these headers to all responses
-    def end_headers(self):
+    def end_headers(self) -> None:
         """
         TODO
         """
@@ -3966,7 +4385,7 @@ class CobblerXMLRPCServer(ThreadingMixIn, xmlrpc.server.SimpleXMLRPCServer):
     just starts the server.
     """
 
-    def __init__(self, args):
+    def __init__(self, args: Any) -> None:
         """
         The constructor for the main Cobbler XMLRPC server.
 
@@ -3986,7 +4405,7 @@ class ProxiedXMLRPCInterface:
     TODO
     """
 
-    def __init__(self, api, proxy_class):
+    def __init__(self, api: "CobblerAPI", proxy_class: Type[Any]) -> None:
         """
         This interface allows proxying request through another class.
 
@@ -3996,7 +4415,7 @@ class ProxiedXMLRPCInterface:
         self.proxied = proxy_class(api)
         self.logger = self.proxied.api.logger
 
-    def _dispatch(self, method, params, **rest):
+    def _dispatch(self, method: str, params: Any, **rest: Any) -> Any:
         """
         This method magically registers the methods at the XMLRPC interface.
 

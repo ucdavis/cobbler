@@ -33,6 +33,8 @@ clean: ## Cleans Python bytecode, build artifacts and the temp files.
 	@rm -f cobbler/modules/*.pyc
 	@rm -f cobbler/web/*.pyc
 	@rm -f cobbler/web/templatetags/*.pyc
+	@rm -rf cobbler/__pycache__
+	@rm -rf cobbler/**/__pycache__
 	@echo "cleaning: build artifacts"
 	@rm -rf build release dist cobbler.egg-info
 	@rm -rf rpm-build/*
@@ -40,11 +42,14 @@ clean: ## Cleans Python bytecode, build artifacts and the temp files.
 	@rm -f MANIFEST AUTHORS
 	@rm -f config/version
 	@rm -f docs/*.1.gz
+	@rm -rf docs/_build
 	@echo "cleaning: temp files"
 	@rm -f *~
 	@rm -rf buildiso
 	@rm -f *.tmp
 	@rm -f *.log
+	@rm -f supervisord.pid
+	@rm -rf .pytest_cache
 
 cleandoc: ## Cleans the docs directory.
 	@echo "cleaning: documentation"
@@ -53,6 +58,9 @@ cleandoc: ## Cleans the docs directory.
 doc: ## Creates the documentation with sphinx in html form.
 	@echo "creating: documentation"
 	@cd docs; make html > /dev/null 2>&1
+
+man: ## Creates documentation and man pages using Sphinx
+	@${PYTHON} -m sphinx -b man -j auto ./docs ./build/sphinx/man
 
 qa: ## If black is found then it is run.
 ifeq ($(strip $(BLACK)),)

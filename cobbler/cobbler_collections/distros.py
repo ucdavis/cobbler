@@ -6,17 +6,21 @@ Cobbler module that at runtime holds all distros in Cobbler.
 # SPDX-FileCopyrightText: Copyright 2006-2009, Red Hat, Inc and Others
 # SPDX-FileCopyrightText: Michael DeHaan <michael.dehaan AT gmail>
 
-import os.path
 import glob
+import os.path
+from typing import TYPE_CHECKING, Any, Dict
 
-from cobbler.cobbler_collections import collection
-from cobbler.items import distro
 from cobbler import utils
 from cobbler.cexceptions import CX
+from cobbler.cobbler_collections import collection
+from cobbler.items import distro
 from cobbler.utils import filesystem_helpers
 
+if TYPE_CHECKING:
+    from cobbler.api import CobblerAPI
 
-class Distros(collection.Collection):
+
+class Distros(collection.Collection[distro.Distro]):
     """
     A distro represents a network bootable matched set of kernels and initrd files.
     """
@@ -29,29 +33,33 @@ class Distros(collection.Collection):
     def collection_types() -> str:
         return "distros"
 
-    def factory_produce(self, api, item_dict):
+    def factory_produce(
+        self, api: "CobblerAPI", seed_data: Dict[str, Any]
+    ) -> "distro.Distro":
         """
-        Return a Distro forged from item_dict
+        Return a Distro forged from seed_data
+
+        :param api: Parameter is skipped.
+        :param seed_data: Data to seed the object with.
+        :returns: The created object.
         """
-        new_distro = distro.Distro(api)
-        new_distro.from_dict(item_dict)
-        return new_distro
+        return distro.Distro(self.api, **seed_data)
 
     def remove(
         self,
-        name,
+        name: str,
         with_delete: bool = True,
         with_sync: bool = True,
         with_triggers: bool = True,
         recursive: bool = False,
-    ):
+    ) -> None:
         """
         Remove element named 'name' from the collection
 
         :raises CX: In case any subitem (profiles or systems) would be orphaned. If the option ``recursive`` is set then
                     the orphaned items would be removed automatically.
         """
-        obj = self.find(name=name)
+        obj = self.listing.get(name, None)
 
         if obj is None:
             raise CX(f"cannot delete an object that does not exist: {name}")
@@ -59,12 +67,15 @@ class Distros(collection.Collection):
         # first see if any Groups use this distro
         if not recursive:
             for profile in self.api.profiles():
-                if profile.distro and profile.distro.name == name:
+                if profile.distro and profile.distro.name == name:  # type: ignore
                     raise CX(f"removal would orphan profile: {profile.name}")
 
-        kernel = obj.kernel
         if recursive:
-            kids = self.api.find_items("profile", {"distro": obj.name})
+            kids = self.api.find_profile(return_list=True, **{"distro": obj.name})
+            if kids is None:
+                kids = []
+            if not isinstance(kids, list):
+                raise ValueError("find_items is expected to return a list or None!")
             for k in kids:
                 self.api.remove_profile(
                     k,
@@ -80,7 +91,7 @@ class Distros(collection.Collection):
                 )
             if with_sync:
                 lite_sync = self.api.get_sync()
-                lite_sync.remove_single_distro(name)
+                lite_sync.remove_single_distro(obj)
         with self.lock:
             del self.listing[name]
 
@@ -100,8 +111,9 @@ class Distros(collection.Collection):
         settings = self.api.settings()
         possible_storage = glob.glob(settings.webdir + "/distro_mirror/*")
         path = None
+        kernel = obj.kernel
         for storage in possible_storage:
-            if os.path.dirname(obj.kernel).find(storage) != -1:
+            if os.path.dirname(kernel).find(storage) != -1:
                 path = storage
                 continue
 

@@ -5,13 +5,18 @@ Cobbler module that at runtime holds all files in Cobbler.
 # SPDX-License-Identifier: GPL-2.0-or-later
 # SPDX-FileCopyrightText: Copyright 2010, Kelsey Hightower <kelsey.hightower@gmail.com>
 
-from cobbler.cobbler_collections import collection
-from cobbler.items import file as file
+from typing import TYPE_CHECKING, Any, Dict
+
 from cobbler import utils
 from cobbler.cexceptions import CX
+from cobbler.cobbler_collections import collection
+from cobbler.items import file
+
+if TYPE_CHECKING:
+    from cobbler.api import CobblerAPI
 
 
-class Files(collection.Collection):
+class Files(collection.Collection[file.File]):
     """
     Files provide a container for file resources.
     """
@@ -24,17 +29,19 @@ class Files(collection.Collection):
     def collection_types() -> str:
         return "files"
 
-    def factory_produce(self, api, item_dict):
+    def factory_produce(self, api: "CobblerAPI", seed_data: Dict[str, Any]):
         """
-        Return a File forged from item_dict
+        Return a File forged from seed_data
+
+        :param api: Parameter is skipped.
+        :param seed_data: Data to seed the object with.
+        :returns: The created object.
         """
-        new_file = file.File(api)
-        new_file.from_dict(item_dict)
-        return new_file
+        return file.File(api, **seed_data)
 
     def remove(
         self,
-        name,
+        name: str,
         with_delete: bool = True,
         with_sync: bool = True,
         with_triggers: bool = True,
@@ -49,6 +56,10 @@ class Files(collection.Collection):
 
         if obj is None:
             raise CX(f"cannot delete an object that does not exist: {name}")
+
+        if isinstance(obj, list):
+            # Will never happen, but we want to make mypy happy.
+            raise CX("Ambiguous match detected!")
 
         if with_delete:
             if with_triggers:

@@ -18,6 +18,7 @@ RUN zypper install -y          \
     wget2                      \
     make                       \
     util-linux                 \
+    openssl                    \
     hardlink                   \
     xorriso                    \
     ipmitool                   \
@@ -48,7 +49,9 @@ RUN zypper install -y          \
     python3-PyYAML             \
     python3-wheel              \
     rpm-build                  \
-    which
+    which                      \
+    mtools                     \
+    dosfstools
 
 # Add bootloader packages
 RUN zypper install --no-recommends -y \

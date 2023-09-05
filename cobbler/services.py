@@ -1,5 +1,63 @@
 """
 Mod Python service functions for Cobbler's public interface (aka cool stuff that works with wget/curl)
+
+Changelog:
+
+Schema: From -> To
+
+Current Schema: Please refer to the documentation visible of the individual methods.
+
+V3.4.0 (unreleased)
+    * No changes
+
+V3.3.4 (unreleased)
+    * No changes
+
+V3.3.3
+    * Removed:
+        * ``look``
+
+V3.3.2
+    * No changes
+
+V3.3.1
+    * No changes
+
+V3.3.0
+    * Added:
+        * ``settings``
+    * Changed:
+        * ``gpxe``: Renamed to ``ipxe``
+
+V3.2.2
+    * No changes
+
+V3.2.1
+    * No changes
+
+V3.2.0
+    * No changes
+
+V3.1.2
+    * No changes
+
+V3.1.1
+    * No changes
+
+V3.1.0
+    * No changes
+
+V3.0.1
+    * No changes
+
+V3.0.0
+    * Added:
+        * ``autoinstall``
+        * ``find_autoinstall``
+
+V2.8.5
+    * Inital tracking of changes.
+
 """
 
 # SPDX-License-Identifier: GPL-2.0-or-later
@@ -8,8 +66,10 @@ Mod Python service functions for Cobbler's public interface (aka cool stuff that
 
 import json
 import time
-import urllib
 import xmlrpc.client
+from typing import Any, Callable, Dict, List, Optional, Union
+from urllib import parse
+
 import yaml
 
 from cobbler import download_manager
@@ -21,36 +81,35 @@ class CobblerSvc:
     passed as parameters into the function.
     """
 
-    def __init__(self, server=None, req=None):
+    def __init__(self, server: str = "") -> None:
         """
         Default constructor which sets up everything to be ready.
 
         :param server: The domain to run at.
         :param req: This parameter is unused.
         """
-        # ToDo: Remove req attribute.
         self.server = server
-        self.remote = None
-        self.req = req
+        self.__remote: Optional[xmlrpc.client.Server] = None
         self.dlmgr = download_manager.DownloadManager()
 
-    def __xmlrpc_setup(self):
+    @property
+    def remote(self) -> xmlrpc.client.ServerProxy:
         """
         Sets up the connection to the Cobbler XMLRPC server. This is the version that does not require a login.
         """
-        if self.remote is None:
-            self.remote = xmlrpc.client.Server(self.server, allow_none=True)
+        if self.__remote is None:
+            self.__remote = xmlrpc.client.Server(self.server, allow_none=True)
+        return self.__remote
 
-    def settings(self, **kwargs):
+    def settings(self, **kwargs: Any) -> str:
         """
         Get the application configuration.
 
         :return: Settings object.
         """
-        self.__xmlrpc_setup()
         return json.dumps(self.remote.get_settings(), indent=4)
 
-    def index(self, **args) -> str:
+    def index(self, **args: Any) -> str:
         """
         Just a placeholder method as an entry point.
 
@@ -60,8 +119,13 @@ class CobblerSvc:
         return "no mode specified"
 
     def autoinstall(
-        self, profile=None, system=None, REMOTE_ADDR=None, REMOTE_MAC=None, **rest
-    ):
+        self,
+        profile: Optional[str] = None,
+        system: Optional[str] = None,
+        REMOTE_ADDR: Optional[str] = None,
+        REMOTE_MAC: Optional[str] = None,
+        **rest: Any,
+    ) -> str:
         """
         Generate automatic installation files.
 
@@ -72,13 +136,21 @@ class CobblerSvc:
         :param rest: This parameter is unused.
         :return:
         """
-        self.__xmlrpc_setup()
         data = self.remote.generate_autoinstall(
             profile, system, REMOTE_ADDR, REMOTE_MAC
         )
-        return f"{data}"
+        if isinstance(data, str):
+            return data
+        return "ERROR: Server returned unexpected data!"
 
-    def ks(self, profile=None, system=None, REMOTE_ADDR=None, REMOTE_MAC=None, **rest):
+    def ks(
+        self,
+        profile: Optional[str] = None,
+        system: Optional[str] = None,
+        REMOTE_ADDR: Optional[str] = None,
+        REMOTE_MAC: Optional[str] = None,
+        **rest: Any,
+    ) -> str:
         """
         Generate automatic installation files. This is a legacy function for part backward compatibility to 2.6.6
         releases.
@@ -90,13 +162,21 @@ class CobblerSvc:
         :param rest: This parameter is unused.
         :return:
         """
-        self.__xmlrpc_setup()
         data = self.remote.generate_autoinstall(
             profile, system, REMOTE_ADDR, REMOTE_MAC
         )
-        return f"{data}"
+        if isinstance(data, str):
+            return data
+        return "ERROR: Server returned unexpected data!"
 
-    def ipxe(self, profile=None, image=None, system=None, mac=None, **rest):
+    def ipxe(
+        self,
+        profile: Optional[str] = None,
+        image: Optional[str] = None,
+        system: Optional[str] = None,
+        mac: Optional[str] = None,
+        **rest: Any,
+    ) -> str:
         """
         Generates an iPXE configuration.
 
@@ -106,21 +186,25 @@ class CobblerSvc:
         :param mac: A MAC address.
         :param rest: This parameter is unused.
         """
-        self.__xmlrpc_setup()
         if not system and mac:
             query = {"mac_address": mac}
             if profile:
                 query["profile"] = profile
             elif image:
                 query["image"] = image
-            found = self.remote.find_system(query)
+            # mypy and xmlrpc don't play well together
+            found: List[Any] = self.remote.find_system(query)  # type: ignore
             if found:
                 system = found[0]
 
         data = self.remote.generate_ipxe(profile, image, system)
-        return f"{data}"
+        if isinstance(data, str):
+            return data
+        return "ERROR: Server returned unexpected data!"
 
-    def bootcfg(self, profile=None, system=None, **rest):
+    def bootcfg(
+        self, profile: Optional[str] = None, system: Optional[str] = None, **rest: Any
+    ) -> str:
         """
         Generate a boot.cfg config file. Used primarily for VMware ESXi.
 
@@ -129,11 +213,14 @@ class CobblerSvc:
         :param rest: This parameter is unused.
         :return:
         """
-        self.__xmlrpc_setup()
         data = self.remote.generate_bootcfg(profile, system)
-        return f"{data}"
+        if isinstance(data, str):
+            return data
+        return "ERROR: Server returned unexpected data!"
 
-    def script(self, profile=None, system=None, **rest) -> str:
+    def script(
+        self, profile: Optional[str] = None, system: Optional[str] = None, **rest: Any
+    ) -> str:
         """
         Generate a script based on snippets. Useful for post or late-action scripts where it's difficult to embed the
         script in the response file.
@@ -144,13 +231,14 @@ class CobblerSvc:
                      array. The element from position zero is taken.
         :return: The generated script.
         """
-        self.__xmlrpc_setup()
         data = self.remote.generate_script(
             profile, system, rest["query_string"]["script"][0]
         )
-        return f"{data}"
+        if isinstance(data, str):
+            return data
+        return "ERROR: Server returned unexpected data!"
 
-    def events(self, user="", **rest) -> str:
+    def events(self, user: str = "", **rest: Any) -> str:
         """
         If no user is given then all events are returned. Otherwise only event associated to a user are returned.
 
@@ -158,16 +246,18 @@ class CobblerSvc:
         :param rest: This parameter is unused.
         :return: A JSON object which contains all events.
         """
-        self.__xmlrpc_setup()
         if user == "":
             data = self.remote.get_events("")
         else:
             data = self.remote.get_events(user)
 
+        if not isinstance(data, dict):
+            raise ValueError("Server returned incorrect data!")
+
         # sort it... it looks like { timestamp : [ array of details ] }
         keylist = list(data.keys())
         keylist.sort()
-        results = []
+        results: List[List[Union[str, float]]] = []
         for k in keylist:
             etime = int(data[k][0])
             nowtime = time.time()
@@ -175,7 +265,13 @@ class CobblerSvc:
                 results.append([k, data[k][0], data[k][1], data[k][2]])
         return json.dumps(results)
 
-    def template(self, profile=None, system=None, path=None, **rest) -> str:
+    def template(
+        self,
+        profile: Optional[str] = None,
+        system: Optional[str] = None,
+        path: Optional[str] = None,
+        **rest: Any,
+    ) -> str:
         """
         Generate a templated file for the system. Either specify a profile OR a system.
 
@@ -185,7 +281,6 @@ class CobblerSvc:
         :param rest: This parameter is unused.
         :return: The rendered template.
         """
-        self.__xmlrpc_setup()
         if path is not None:
             path = path.replace("_", "/")
             path = path.replace("//", "_")
@@ -198,9 +293,13 @@ class CobblerSvc:
             data = self.remote.get_template_file_for_system(system, path)
         else:
             data = "# must specify profile or system name"
+        if not isinstance(data, str):
+            raise ValueError("Server returned an unexpected data type!")
         return data
 
-    def yum(self, profile=None, system=None, **rest) -> str:
+    def yum(
+        self, profile: Optional[str] = None, system: Optional[str] = None, **rest: Any
+    ) -> str:
         """
         Generate a repo config. Either specify a profile OR a system.
 
@@ -209,17 +308,23 @@ class CobblerSvc:
         :param rest: This parameter is unused.
         :return: The generated repository config.
         """
-        self.__xmlrpc_setup()
         if profile is not None:
             data = self.remote.get_repo_config_for_profile(profile)
         elif system is not None:
             data = self.remote.get_repo_config_for_system(system)
         else:
             data = "# must specify profile or system name"
+        if not isinstance(data, str):
+            raise ValueError("Server returned an unexpected data type!")
         return data
 
     def trig(
-        self, mode: str = "?", profile=None, system=None, REMOTE_ADDR=None, **rest
+        self,
+        mode: str = "?",
+        profile: Optional[str] = None,
+        system: Optional[str] = None,
+        REMOTE_ADDR: Optional[str] = None,
+        **rest: Any,
     ) -> str:
         """
         Hook to call install triggers. Only valid for a profile OR a system.
@@ -231,7 +336,6 @@ class CobblerSvc:
         :param rest: This parameter is unused.
         :return: The return code of the action.
         """
-        self.__xmlrpc_setup()
         ip_address = REMOTE_ADDR
         if profile:
             return_code = self.remote.run_install_triggers(
@@ -243,7 +347,7 @@ class CobblerSvc:
             )
         return str(return_code)
 
-    def nopxe(self, system=None, **rest) -> str:
+    def nopxe(self, system: Optional[str] = None, **rest: Any) -> str:
         """
         Disables the network boot for the given system.
 
@@ -251,10 +355,9 @@ class CobblerSvc:
         :param rest: This parameter is unused.
         :return: A boolean status if the action succeed or not.
         """
-        self.__xmlrpc_setup()
         return str(self.remote.disable_netboot(system))
 
-    def list(self, what="systems", **rest) -> str:
+    def list(self, what: str = "systems", **rest: Any) -> str:
         """
         Return a list of objects of a desired category. Defaults to "systems".
 
@@ -263,25 +366,26 @@ class CobblerSvc:
         :param rest: This parameter is unused.
         :return: The list of object names.
         """
-        self.__xmlrpc_setup()
+        # mypy and xmlrpc don't play well together
+        listing: List[Dict[str, Any]]
         if what == "systems":
-            listing = self.remote.get_systems()
+            listing = self.remote.get_systems()  # type: ignore
         elif what == "profiles":
-            listing = self.remote.get_profiles()
+            listing = self.remote.get_profiles()  # type: ignore
         elif what == "distros":
-            listing = self.remote.get_distros()
+            listing = self.remote.get_distros()  # type: ignore
         elif what == "images":
-            listing = self.remote.get_images()
+            listing = self.remote.get_images()  # type: ignore
         elif what == "repos":
-            listing = self.remote.get_repos()
+            listing = self.remote.get_repos()  # type: ignore
         elif what == "mgmtclasses":
-            listing = self.remote.get_mgmtclasses()
+            listing = self.remote.get_mgmtclasses()  # type: ignore
         elif what == "packages":
-            listing = self.remote.get_packages()
+            listing = self.remote.get_packages()  # type: ignore
         elif what == "files":
-            listing = self.remote.get_files()
+            listing = self.remote.get_files()  # type: ignore
         elif what == "menus":
-            listing = self.remote.get_menus()
+            listing = self.remote.get_menus()  # type: ignore
         else:
             return "?"
         names = [x["name"] for x in listing]
@@ -289,7 +393,7 @@ class CobblerSvc:
             return "\n".join(names) + "\n"
         return ""
 
-    def autodetect(self, **rest) -> str:
+    def autodetect(self, **rest: Union[str, int, List[str]]) -> str:
         """
         This tries to autodect the system with the given information. If more than one candidate is found an error
         message is returned.
@@ -297,17 +401,21 @@ class CobblerSvc:
         :param rest: The keys "REMOTE_MACS", "REMOTE_ADDR" or "interfaces".
         :return: The name of the possible object or an error message.
         """
-        self.__xmlrpc_setup()
-        systems = self.remote.get_systems()
+        # mypy and xmlrpc don't play well together
+        systems: List[Dict[str, Any]] = self.remote.get_systems()  # type: ignore
 
         # If kssendmac was in the kernel options line, see if a system can be found matching the MAC address. This is
         # more specific than an IP match.
 
-        macinput = [mac.split(" ").lower() for mac in rest["REMOTE_MACS"]]
+        # We cannot be certain that this header is included, thus we can't add a type check (potential breaking change).
+        mac_addresses: List[str] = rest["REMOTE_MACS"]  # type: ignore
+        macinput: List[str] = []
+        for mac in mac_addresses:
+            macinput.extend(mac.lower().split(" "))
 
         ip_address = rest["REMOTE_ADDR"]
 
-        candidates = []
+        candidates: List[Dict[str, Any]] = []
 
         for system in systems:
             for interface in system["interfaces"]:
@@ -326,8 +434,14 @@ class CobblerSvc:
             return "FAILED: multiple matches"
         if len(candidates) == 1:
             return candidates[0]["name"]
+        return "FAILED: Negative amount of matches!"
 
-    def find_autoinstall(self, system=None, profile=None, **rest):
+    def find_autoinstall(
+        self,
+        system: Optional[str] = None,
+        profile: Optional[str] = None,
+        **rest: Union[str, int],
+    ) -> str:
         """
         Find an autoinstallation for a system or a profile. If this is not known different parameters can be passed to
         rest to find it automatically. See "autodetect".
@@ -337,8 +451,6 @@ class CobblerSvc:
         :param rest: The metadata to find the autoinstallation automatically.
         :return: The autoinstall script or error message.
         """
-        self.__xmlrpc_setup()
-
         name = "?"
         if system is not None:
             url = f"{self.server}/cblr/svc/op/autoinstall/system/{name}"
@@ -351,11 +463,16 @@ class CobblerSvc:
             url = f"{self.server}/cblr/svc/op/autoinstall/system/{name}"
 
         try:
-            return self.dlmgr.urlread(url)
+            return self.dlmgr.urlread(url).content.decode("UTF-8")
         except Exception:
             return f"# automatic installation file retrieval failed ({url})"
 
-    def findks(self, system=None, profile=None, **rest):
+    def findks(
+        self,
+        system: Optional[str] = None,
+        profile: Optional[str] = None,
+        **rest: Union[str, int],
+    ) -> str:
         """
         This is a legacy function which enabled Cobbler partly to be backward compatible to 2.6.6 releases.
 
@@ -365,8 +482,6 @@ class CobblerSvc:
         :param rest: If you wish you can try to let Cobbler autodetect the system with the MAC address.
         :return: Returns the autoinstall/kickstart profile.
         """
-        self.__xmlrpc_setup()
-
         name = "?"
         if system is not None:
             url = f"{self.server}/cblr/svc/op/ks/system/{name}"
@@ -379,11 +494,11 @@ class CobblerSvc:
             url = f"{self.server}/cblr/svc/op/ks/system/{name}"
 
         try:
-            return self.dlmgr.urlread(url)
+            return self.dlmgr.urlread(url).content.decode("UTF-8")
         except Exception:
             return f"# kickstart retrieval failed ({url})"
 
-    def puppet(self, hostname=None, **rest) -> str:
+    def puppet(self, hostname: Optional[str] = None, **rest: Union[str, int]) -> str:
         """
         Dump the puppet data which is available for Cobbler.
 
@@ -391,13 +506,15 @@ class CobblerSvc:
         :param rest: This parameter is unused.
         :return: The yaml for the host.
         """
-        self.__xmlrpc_setup()
-
         if hostname is None:
             return "hostname is required"
 
         settings = self.remote.get_settings()
+        if not isinstance(settings, dict):
+            raise ValueError("Server returned an unexpected data type!")
         results = self.remote.find_system_by_dns_name(hostname)
+        if not isinstance(results, dict):
+            raise ValueError("Server returned an unexpected data type!")
 
         classes = results.get("mgmt_classes", {})
         params = results.get("mgmt_parameters", {})
@@ -441,7 +558,7 @@ class CobblerSvc:
         return yaml.dump(data, default_flow_style=False)
 
 
-def __fillup_form_dict(form: dict, my_uri: str) -> str:
+def __fillup_form_dict(form: Dict[Any, Any], my_uri: str) -> str:
     """
     Helper function to fillup the form dict with required mode information.
 
@@ -449,7 +566,7 @@ def __fillup_form_dict(form: dict, my_uri: str) -> str:
     :param my_uri: The URI to work with.
     :return: The normalized URI.
     """
-    my_uri = urllib.parse.unquote(my_uri)
+    my_uri = parse.unquote(my_uri)
 
     tokens = my_uri.split("/")
     tokens = tokens[1:]
@@ -464,12 +581,12 @@ def __fillup_form_dict(form: dict, my_uri: str) -> str:
     return my_uri
 
 
-def __generate_remote_mac_list(environ: dict) -> list:
+def __generate_remote_mac_list(environ: Dict[str, Any]) -> List[Any]:
     # This MAC header is set by anaconda during a kickstart booted with the
     # kssendmac kernel option. The field will appear here as something
     # like: eth0 XX:XX:XX:XX:XX:XX
     mac_counter = 0
-    remote_macs = []
+    remote_macs: List[Any] = []
     mac_header = f"HTTP_X_RHN_PROVISIONING_MAC_{mac_counter:d}"
     while environ.get(mac_header, None):
         remote_macs.append(environ[mac_header])
@@ -478,7 +595,9 @@ def __generate_remote_mac_list(environ: dict) -> list:
     return remote_macs
 
 
-def application(environ, start_response):
+def application(
+    environ: Dict[str, Any], start_response: Callable[[str, List[Any]], None]
+) -> List[bytes]:
     """
     UWSGI entrypoint for Gunicorn
 
@@ -487,9 +606,9 @@ def application(environ, start_response):
     :return:
     """
 
-    form = {}
+    form: Dict[str, Any] = {}
     my_uri = __fillup_form_dict(form, environ["RAW_URI"])
-    form["query_string"] = urllib.parse.parse_qs(environ["QUERY_STRING"])
+    form["query_string"] = parse.parse_qs(environ["QUERY_STRING"])
     form["REMOTE_MACS"] = __generate_remote_mac_list(environ)
 
     # REMOTE_ADDR isn't a required wsgi attribute so it may be naive to assume it's always present in this context.
@@ -526,7 +645,7 @@ def application(environ, start_response):
         ):
             print(f"content not found: {my_uri}")
             status = "404 NOT FOUND"
-    except xmlrpc.server.Fault as err:
+    except xmlrpc.client.Fault as err:
         status = "500 SERVER ERROR"
         content = err.faultString
 

@@ -1,8 +1,9 @@
 """
-Top most "conftest.py" which is available for all tests of our codebase.
+Fixtures that are shared between all tests inside the testsuite.
 """
 
 import os
+import pathlib
 import shutil
 from contextlib import contextmanager
 from pathlib import Path
@@ -12,25 +13,36 @@ import pytest
 
 from cobbler.api import CobblerAPI
 from cobbler.items.distro import Distro
+from cobbler.items.image import Image
+from cobbler.items.menu import Menu
 from cobbler.items.profile import Profile
 from cobbler.items.system import NetworkInterface, System
-from cobbler.items.image import Image
 
 
 @contextmanager
 def does_not_raise():
+    """
+    Fixture that represents a context manager that will expect that no raise occurs.
+    """
     yield
 
 
 @pytest.fixture(scope="function")
 def cobbler_api() -> CobblerAPI:
+    """
+    Fixture that represents the Cobbler API for a single test.
+    """
+    # pylint: disable=protected-access
     CobblerAPI.__shared_state = {}  # type: ignore
     CobblerAPI.__has_loaded = False  # type: ignore
     return CobblerAPI()
 
 
 @pytest.fixture(scope="function", autouse=True)
-def reset_settings_yaml(tmp_path: Path):
+def reset_settings_yaml(tmp_path: pathlib.Path):
+    """
+    Fixture that automatically resets the settings YAML after every test.
+    """
     filename = "settings.yaml"
     filepath = "/etc/cobbler/%s" % filename
     shutil.copy(filepath, tmp_path.joinpath(filename))
@@ -40,6 +52,9 @@ def reset_settings_yaml(tmp_path: Path):
 
 @pytest.fixture(scope="function", autouse=True)
 def reset_items(cobbler_api: CobblerAPI):
+    """
+    Fixture that deletes all items automatically after every test.
+    """
     for system in cobbler_api.systems():
         cobbler_api.remove_system(system.name)
     for image in cobbler_api.images():
@@ -61,9 +76,9 @@ def reset_items(cobbler_api: CobblerAPI):
 
 
 @pytest.fixture(scope="function")
-def create_testfile(tmp_path: Path):
+def create_testfile(tmp_path: pathlib.Path):
     """
-    Provides a method that creates a testfile inside the directory for one single test with a given name.
+    Fixture that provides a method to create an arbitrary file inside the folder specifically for a single test.
     """
 
     def _create_testfile(filename: str) -> str:
@@ -76,15 +91,14 @@ def create_testfile(tmp_path: Path):
 
 
 @pytest.fixture(scope="function")
-def create_kernel_initrd(create_testfile: Callable[[str], str]):
+def create_kernel_initrd(create_testfile: Callable[[str], None]):
     """
-    Provides a method that touches two empty files that can act as a kernel and initrd. The folder with the two files
-    is returned.
+    Creates a kernel and initrd pair in the folder for the current test.
     """
 
-    def _create_kernel_initrd(name_kernel: str, name_initrd: str):
+    def _create_kernel_initrd(name_kernel: str, name_initrd: str) -> str:
         create_testfile(name_kernel)
-        return os.path.dirname(create_testfile(name_initrd))
+        return os.path.dirname(create_testfile(name_initrd))  # type: ignore
 
     return _create_kernel_initrd
 
@@ -98,16 +112,16 @@ def create_distro(
     fk_initrd: str,
 ):
     """
-    Returns a function which has the distro name as an argument. The function returns a distro object. The distro is already added to
-    the CobblerAPI.
+    Returns a function which has the distro name as an argument. The function returns a distro object. The distro is
+    already added to the CobblerAPI.
     """
 
-    def _create_distro(name="") -> Distro:
+    def _create_distro(name: str = "") -> Distro:
         test_folder = create_kernel_initrd(fk_kernel, fk_initrd)
         test_distro = cobbler_api.new_distro()
         test_distro.name = (
-            request.node.originalname
-            if request.node.originalname
+            request.node.originalname  # type: ignore
+            if request.node.originalname  # type: ignore
             else request.node.name
         )
         if name != "":
@@ -127,11 +141,13 @@ def create_profile(request: "pytest.FixtureRequest", cobbler_api: CobblerAPI):
     already added to the CobblerAPI.
     """
 
-    def _create_profile(distro_name="", profile_name="", name="") -> Profile:
+    def _create_profile(
+        distro_name: str = "", profile_name: str = "", name: str = ""
+    ) -> Profile:
         test_profile = cobbler_api.new_profile()
         test_profile.name = (
-            request.node.originalname
-            if request.node.originalname
+            request.node.originalname  # type: ignore
+            if request.node.originalname  # type: ignore
             else request.node.name
         )
         if name != "":
@@ -156,8 +172,8 @@ def create_image(request: "pytest.FixtureRequest", cobbler_api: CobblerAPI):
     def _create_image(name: str = "") -> Image:
         test_image = cobbler_api.new_image()
         test_image.name = (
-            request.node.originalname
-            if request.node.originalname
+            request.node.originalname  # type: ignore
+            if request.node.originalname  # type: ignore
             else request.node.name
         )
         if name != "":
@@ -181,8 +197,8 @@ def create_system(request: "pytest.FixtureRequest", cobbler_api: CobblerAPI):
         test_system = cobbler_api.new_system()
         if name == "":
             test_system.name = (
-                request.node.originalname
-                if request.node.originalname
+                request.node.originalname  # type: ignore
+                if request.node.originalname  # type: ignore
                 else request.node.name
             )
         else:
@@ -196,6 +212,31 @@ def create_system(request: "pytest.FixtureRequest", cobbler_api: CobblerAPI):
         return test_system
 
     return _create_system
+
+
+@pytest.fixture(scope="function")
+def create_menu(request: "pytest.FixtureRequest", cobbler_api: CobblerAPI):
+    """
+    Returns a function which has the profile name as an argument. The function returns a system object. The system is
+    already added to the CobblerAPI.
+    """
+
+    def _create_menu(name: str = "", display_name: str = "") -> Menu:
+        test_menu = cobbler_api.new_menu()
+
+        if name == "":
+            test_menu.name = (
+                request.node.originalname  # type: ignore
+                if request.node.originalname  # type: ignore
+                else request.node.name
+            )
+
+        test_menu.display_name = display_name
+
+        cobbler_api.add_menu(test_menu)
+        return test_menu
+
+    return _create_menu
 
 
 @pytest.fixture(scope="function", autouse=True)
@@ -229,7 +270,7 @@ def fk_initrd(request: "pytest.FixtureRequest") -> str:
     :return: A filename as a string.
     """
     return "initrd_%s.img" % (
-        request.node.originalname if request.node.originalname else request.node.name
+        request.node.originalname if request.node.originalname else request.node.name  # type: ignore
     )
 
 
@@ -241,7 +282,7 @@ def fk_kernel(request: "pytest.FixtureRequest") -> str:
     :return: A path as a string.
     """
     return "vmlinuz_%s" % (
-        request.node.originalname if request.node.originalname else request.node.name
+        request.node.originalname if request.node.originalname else request.node.name  # type: ignore
     )
 
 

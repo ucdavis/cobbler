@@ -7,18 +7,21 @@ Module loader, adapted for Cobbler usage
 # SPDX-FileCopyrightText: Adrian Likins <alikins@redhat.com>
 # SPDX-FileCopyrightText: Michael DeHaan <michael.dehaan AT gmail>
 
-import logging
-from importlib import import_module
-
 import glob
+import logging
 import os
-from typing import Optional, Dict, Any
+from importlib import import_module
+from types import ModuleType
+from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
 
 from cobbler.cexceptions import CX
 from cobbler.utils import log_exc
 
 # add cobbler/modules to python path
-import cobbler
+import cobbler  # isort: skip
+
+if TYPE_CHECKING:
+    from cobbler.api import CobblerAPI
 
 
 class ModuleLoader:
@@ -26,7 +29,7 @@ class ModuleLoader:
     Class for dynamically loading Cobbler Plugins on startup
     """
 
-    def __init__(self, api, module_path: str = ""):
+    def __init__(self, api: "CobblerAPI", module_path: str = ""):
         """
         Constructor to initialize the ModuleLoader class.
 
@@ -40,11 +43,13 @@ class ModuleLoader:
         )
         if module_path:
             self.mod_path = module_path
-        self.module_cache: Dict[str, Any] = {}
-        self.modules_by_category: Dict[str, Dict[str, Any]] = {}
+        self.module_cache: Dict[str, ModuleType] = {}
+        self.modules_by_category: Dict[str, Dict[str, ModuleType]] = {}
         self.api = api
 
-    def load_modules(self):
+    def load_modules(
+        self,
+    ) -> Tuple[Dict[str, ModuleType], Dict[str, Dict[str, ModuleType]]]:
         """
         Load the modules from the path handed to the function into Cobbler.
 
@@ -80,7 +85,7 @@ class ModuleLoader:
 
         return self.module_cache, self.modules_by_category
 
-    def __import_module(self, modname: str):
+    def __import_module(self, modname: str) -> None:
         """
         Import a module which is not part of the core functionality of Cobbler.
 
@@ -92,7 +97,7 @@ class ModuleLoader:
                 self.logger.debug(
                     "%s.%s is not a proper module", self.mod_path, modname
                 )
-                return None
+                return
             category = blip.register()
             if category:
                 self.module_cache[modname] = blip
@@ -103,7 +108,7 @@ class ModuleLoader:
             self.logger.info("Exception raised when loading module %s", modname)
             log_exc()
 
-    def get_module_by_name(self, name: str):
+    def get_module_by_name(self, name: str) -> Optional[ModuleType]:
         """
         Get a module by its name. The category of the module is not needed.
 
@@ -153,7 +158,7 @@ class ModuleLoader:
 
     def get_module_from_file(
         self, category: str, field: str, fallback_module_name: Optional[str] = None
-    ):
+    ) -> ModuleType:
         """
         Get Python module, based on name defined in configuration file
 
@@ -170,7 +175,7 @@ class ModuleLoader:
             raise CX(f"Failed to load module for {category}.{field}")
         return requested_module
 
-    def get_modules_in_category(self, category: str) -> list:
+    def get_modules_in_category(self, category: str) -> List[ModuleType]:
         """
         Return all modules of a module category.
 

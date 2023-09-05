@@ -6,13 +6,18 @@ Cobbler module that at runtime holds all profiles in Cobbler.
 # SPDX-FileCopyrightText: Copyright 2006-2009, Red Hat, Inc and Others
 # SPDX-FileCopyrightText: Michael DeHaan <michael.dehaan AT gmail>
 
-from cobbler.cobbler_collections import collection
-from cobbler.items import profile as profile
+from typing import TYPE_CHECKING, Any, Dict
+
 from cobbler import utils
 from cobbler.cexceptions import CX
+from cobbler.cobbler_collections import collection
+from cobbler.items import profile
+
+if TYPE_CHECKING:
+    from cobbler.api import CobblerAPI
 
 
-class Profiles(collection.Collection):
+class Profiles(collection.Collection[profile.Profile]):
     """
     A profile represents a distro paired with an automatic OS installation template file.
     """
@@ -25,13 +30,11 @@ class Profiles(collection.Collection):
     def collection_types() -> str:
         return "profiles"
 
-    def factory_produce(self, api, item_dict):
+    def factory_produce(self, api: "CobblerAPI", seed_data: Dict[Any, Any]):
         """
-        Return a Distro forged from item_dict
+        Return a Distro forged from seed_data
         """
-        new_profile = profile.Profile(api)
-        new_profile.from_dict(item_dict)
-        return new_profile
+        return profile.Profile(self.api, **seed_data)
 
     def remove(
         self,
@@ -48,12 +51,17 @@ class Profiles(collection.Collection):
         """
         if not recursive:
             for system in self.api.systems():
-                if system.profile is not None and system.profile == name:
+                if system.profile == name:
                     raise CX(f"removal would orphan system: {system.name}")
 
-        obj = self.find(name=name)
+        obj = self.listing.get(name, None)
+
         if obj is None:
             raise CX(f"cannot delete an object that does not exist: {name}")
+
+        if isinstance(obj, list):
+            # Will never happen, but we want to make mypy happy.
+            raise CX("Ambiguous match detected!")
 
         if recursive:
             kids = obj.descendants
@@ -86,4 +94,4 @@ class Profiles(collection.Collection):
                 )
             if with_sync:
                 lite_sync = self.api.get_sync()
-                lite_sync.remove_single_profile(name)
+                lite_sync.remove_single_profile(obj)

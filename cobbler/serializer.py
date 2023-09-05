@@ -12,6 +12,12 @@ import os
 import pathlib
 import sys
 import time
+from types import ModuleType
+from typing import TYPE_CHECKING, Any, Dict, Optional, TextIO
+
+if TYPE_CHECKING:
+    from cobbler.api import CobblerAPI
+    from cobbler.cobbler_collections.collection import ITEM, Collection
 
 
 class Serializer:
@@ -19,7 +25,7 @@ class Serializer:
     Serializer interface that is used to access data in Cobbler independent of the actual data source.
     """
 
-    def __init__(self, api):
+    def __init__(self, api: "CobblerAPI"):
         """
         Constructor that created the state for the object.
 
@@ -28,12 +34,12 @@ class Serializer:
         self.api = api
         self.logger = logging.getLogger()
         self.lock_enabled = True
-        self.lock_handle = None
+        self.lock_handle: Optional[TextIO] = None
         self.lock_file_location = "/var/lib/cobbler/lock"
         self.storage_module = self.__get_storage_module()
         self.storage_object = self.storage_module.storage_factory(api)
 
-    def __grab_lock(self):
+    def __grab_lock(self) -> None:
         """
         Dual purpose locking:
         (A) flock to avoid multiple process access
@@ -50,7 +56,7 @@ class Serializer:
             self.logger.exception("File locking error.", exc_info=exception)
             sys.exit(7)
 
-    def __release_lock(self, with_changes=False):
+    def __release_lock(self, with_changes: bool = False) -> None:
         """
         Releases the lock on the resource that is currently being written.
 
@@ -67,7 +73,7 @@ class Serializer:
             fcntl.flock(self.lock_handle.fileno(), fcntl.LOCK_UN)
             self.lock_handle.close()
 
-    def serialize(self, collection):
+    def serialize(self, collection: "Collection[ITEM]") -> None:
         """
         Save a collection to disk
 
@@ -78,7 +84,7 @@ class Serializer:
         self.storage_object.serialize(collection)
         self.__release_lock()
 
-    def serialize_item(self, collection, item):
+    def serialize_item(self, collection: "Collection[ITEM]", item: "ITEM") -> None:
         """
         Save a collection item to disk
 
@@ -90,7 +96,7 @@ class Serializer:
         self.storage_object.serialize_item(collection, item)
         self.__release_lock(with_changes=True)
 
-    def serialize_delete(self, collection, item):
+    def serialize_delete(self, collection: "Collection[ITEM]", item: "ITEM") -> None:
         """
         Delete a collection item from disk
 
@@ -102,7 +108,9 @@ class Serializer:
         self.storage_object.serialize_delete(collection, item)
         self.__release_lock(with_changes=True)
 
-    def deserialize(self, collection, topological: bool = True):
+    def deserialize(
+        self, collection: "Collection[ITEM]", topological: bool = True
+    ) -> None:
         """
         Load a collection from disk.
 
@@ -115,7 +123,19 @@ class Serializer:
         self.storage_object.deserialize(collection, topological)
         self.__release_lock()
 
-    def __get_storage_module(self):
+    def deserialize_item(self, collection_type: str, item_name: str) -> Dict[str, Any]:
+        """
+        Load a collection item from disk.
+
+        :param collection_type: The collection type to deserialize.
+        :param item_name: The collection item name to deserialize.
+        """
+        self.__grab_lock()
+        result = self.storage_object.deserialize_item(collection_type, item_name)
+        self.__release_lock()
+        return result
+
+    def __get_storage_module(self) -> ModuleType:
         """
         Look up configured module in the settings
 
@@ -123,6 +143,8 @@ class Serializer:
         """
         return self.api.get_module_from_file(
             "serializers",
-            self.api.settings().modules.get("serializers", {}).get("module"),
+            self.api.settings()
+            .modules.get("serializers", {})
+            .get("module", "serializers.file"),
             "serializers.file",
         )

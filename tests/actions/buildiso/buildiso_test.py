@@ -4,8 +4,10 @@ import pytest
 
 from cobbler import enums
 from cobbler.actions import buildiso
+from cobbler.actions.buildiso import LoaderCfgsParts
 from cobbler.actions.buildiso.netboot import NetbootBuildiso
 from cobbler.actions.buildiso.standalone import StandaloneBuildiso
+
 from tests.conftest import does_not_raise
 
 
@@ -28,17 +30,13 @@ def test_calculate_grub_name(
     result_binary_name,
     expected_exception,
     cobbler_api,
-    create_distro,
 ):
     # Arrange
     test_builder = buildiso.BuildIso(cobbler_api)
-    test_distro = create_distro()
-    test_distro.arch = input_arch
-    cobbler_api.add_distro(test_distro)
 
     # Act
     with expected_exception:
-        result = test_builder.calculate_grub_name(test_distro)
+        result = test_builder.calculate_grub_name(input_arch)
 
         # Assert
         assert result == result_binary_name
@@ -87,10 +85,74 @@ def test_copy_boot_files(cobbler_api, create_distro, tmpdir):
     testdistro = create_distro()
 
     # Act
-    build_iso.copy_boot_files(testdistro, target_folder)
+    build_iso._copy_boot_files(testdistro.kernel, testdistro.initrd, target_folder)
 
     # Assert
     assert len(os.listdir(target_folder)) == 2
+
+
+def test_netboot_generate_boot_loader_configs(
+    cobbler_api, create_distro, create_profile, create_system
+):
+    test_distro = create_distro()
+    test_distro.kernel_options = "test_distro_option=distro"
+    test_profile = create_profile(test_distro.name)
+    test_profile.kernel_options = "test_profile_option=profile"
+    test_system = create_system(test_profile.name)
+    test_system.kernel_options = "test_system_option=system"
+    build_iso = NetbootBuildiso(cobbler_api)
+
+    # Act
+    result = build_iso._generate_boot_loader_configs(
+        [test_profile.name], [test_system.name], True
+    )
+    matching_isolinux_kernel = [
+        part for part in result.isolinux if "KERNEL /1.krn" in part
+    ]
+    matching_isolinux_initrd = [
+        part for part in result.isolinux if "initrd=/1.img" in part
+    ]
+    matching_grub_kernel = [part for part in result.grub if "linux /1.krn" in part]
+    matching_grub_initrd = [part for part in result.grub if "initrd /1.img" in part]
+    matching_grub_distro_kopts = [
+        part for part in result.grub if "test_distro_option=distro" in part
+    ]
+    matching_grub_profile_kopts = [
+        part for part in result.grub if "test_profile_option=profile" in part
+    ]
+    matching_grub_system_kopts = [
+        part for part in result.grub if "test_system_option=system" in part
+    ]
+    matching_isolinux_distro_kopts = [
+        part for part in result.isolinux if "test_distro_option=distro" in part
+    ]
+    matching_isolinux_profile_kopts = [
+        part for part in result.isolinux if "test_profile_option=profile" in part
+    ]
+    matching_isolinux_system_kopts = [
+        part for part in result.isolinux if "test_system_option=system" in part
+    ]
+
+    # Assert
+    assert isinstance(result, LoaderCfgsParts)
+    for iterable_to_check in [
+        matching_isolinux_kernel,
+        matching_isolinux_initrd,
+        matching_grub_kernel,
+        matching_grub_initrd,
+        result.bootfiles_copysets,
+        matching_grub_distro_kopts,
+        matching_grub_profile_kopts,
+        matching_isolinux_distro_kopts,
+        matching_isolinux_profile_kopts,
+    ]:
+        print(iterable_to_check)
+        # one entry for the profile, one for the system
+        assert len(iterable_to_check) == 2
+
+    # only system entries have system kernel opts
+    assert len(matching_grub_system_kopts) == 1
+    assert len(matching_isolinux_system_kopts) == 1
 
 
 def test_filter_system(
@@ -132,7 +194,6 @@ def test_filter_profile(cobbler_api, create_distro, create_profile):
 def test_netboot_run(
     cobbler_api,
     create_distro,
-    create_loaders,
     tmpdir,
 ):
     # Arrange
@@ -150,7 +211,6 @@ def test_netboot_run(
 def test_standalone_run(
     cobbler_api,
     create_distro,
-    create_loaders,
     tmpdir_factory,
 ):
     # Arrange
