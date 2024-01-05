@@ -1,14 +1,24 @@
 ## Build
-`apt install docker.io`
-`./docker/debs/build-and-install-debs.sh deb11 docker/debs/Debian_11/Debian11.dockerfile`
+https://github.com/ucdavis/cobbler
+* `Sync fork`
+
+`git pull`
+`apt install podman`
+`./docker/debs/build-and-install-debs.sh --with-podman deb11 docker/debs/Debian_11/Debian11.dockerfile`
 
 deb built as: `deb-build/cobbler_3.4.0_all.deb`
+
+Prune the docker containers:
+* `sudo podman container prune`
+* `sudo podman image prune -a`
 
 ## Install
 ```
 apt install python3-ldap python3-dnspython gunicorn pxelinux ipxe shim-signed apache2 tftpd-hpa fence-agents xorriso python3-cheetah python3-netaddr python3-pymongo python3-schema bind9 isc-dhcp-server
 dpkg -i deb-build/cobbler_3.4.0_all.deb
-apt remove --purge docker.io
+
+# Optional, purge podman
+apt remove --purge podman
 apt autoremove --purge
 ```
 
