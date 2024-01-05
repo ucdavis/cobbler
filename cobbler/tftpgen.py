@@ -1260,9 +1260,17 @@ class TFTPGen:
                     name = system.name
 
                 iso_path = "http://%s/cobbler-html/ISOs/%s.iso" % (httpserveraddress, distro.name)
+                # Trailing / MANDATORY per spec
                 system_conf_path = "http://%s/cobbler-html/nocloud-net/%s/" % (httpserveraddress, name)
-                
-                append_line = "%s ip=dhcp url=%s autoinstall ds=nocloud-net;s=%s root=/dev/ram0 cloud-config-url=/dev/null" % (append_line, iso_path, system_conf_path)
+
+                if system and system.filename.endswith('.efi'):
+                    # EFI, at least the grubnetx64.efi loader is broken by the ;, so it needs quoting.
+                    quote="'"
+                else:
+                    # pxelinux.0 breaks with the quotes, so present it bare.
+                    quote=""
+
+                append_line = f"{append_line} ip=dhcp url={iso_path} autoinstall ds={quote}nocloud-net;seedfrom={system_conf_path}{quote} root=/dev/ram0 cloud-config-url=/dev/null"
             elif distro.breed == "freebsd":
                 append_line = f"{append_line} ks={autoinstall_path}"
 
