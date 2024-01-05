@@ -21,6 +21,7 @@ User Guide
    Power Management <user-guide/power-management>
    Boot CD <user-guide/boot-cd>
    Advanced Networking <user-guide/advanced-networking>
+   SELinux <user-guide/selinux>
 
 
 API
@@ -99,8 +100,14 @@ Network Topics
 PXE Menus
 =========
 
-Cobbler will automatically generate PXE menus for all profiles it has defined. Running ``cobbler sync`` is required to
-generate and update these menus.
+Cobbler will automatically generate PXE menus for all profiles that have the ``enable_menu`` property set. You can
+enable this with:
+
+.. code-block:: shell-session
+
+   cobbler profile edit --name=PROFILE --enable-menu=yes
+
+Running ``cobbler sync`` is required to generate and update these menus.
 
 To access the menus, type ``menu`` at the ``boot:`` prompt while a system is PXE booting. If nothing is typed, the
 network boot will default to a local boot. If "menu" is typed, the user can then choose and provision any Cobbler

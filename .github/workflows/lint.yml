@@ -10,7 +10,7 @@ jobs:
   docs:
     runs-on: ubuntu-20.04
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v4
     - name: Set up Python
       uses: actions/setup-python@v1
       with:
@@ -24,7 +24,7 @@ jobs:
   shellscripts:
     runs-on: ubuntu-20.04
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v4
       - name: Run ShellCheck
         uses: ludeeus/action-shellcheck@master
         with:
@@ -32,14 +32,14 @@ jobs:
   pyright:
     runs-on: ubuntu-20.04
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - uses: actions/setup-python@v4
         with:
           python-version: '3.6'
           cache: 'pip' # caching pip dependencies
           cache-dependency-path: '**/setup.py'
       - name: Install system dependencies
-        run: sudo apt-get install -y libldap2-dev libsasl2-dev
+        run: sudo apt-get install -y libldap2-dev libsasl2-dev libsystemd-dev
       - name: Install Python dependencies
         run: pip install .[test,extra,docs,lint]
       - name: Get changed files
@@ -59,16 +59,16 @@ jobs:
     name: black formatter
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v4
       - uses: psf/black@stable
         with:
-          options: "--check --safe --verbose"
+          options: "--check --diff --safe --verbose"
           version: "22.3.0"
   python_isort:
     name: isort formatter
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v4
       - uses: actions/setup-python@v2
       - uses: isort/isort-action@v1.1.0
         with:

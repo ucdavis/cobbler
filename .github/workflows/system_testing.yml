@@ -11,11 +11,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
       - name: Pull Docker Test Container
-        run: docker pull registry.opensuse.org/home/cobbler-project/github-ci/containers/cobbler-test-github:main
+        run: docker pull registry.opensuse.org/systemsmanagement/cobbler/github-ci/containers/cobbler-test-github:main
       - name: Run previously built Docker Container
-        run: docker run --privileged -t -d -v $PWD:/code --name cobbler registry.opensuse.org/home/cobbler-project/github-ci/containers/cobbler-test-github:main
+        run: docker run --privileged -t -d -v $PWD:/code --name cobbler registry.opensuse.org/systemsmanagement/cobbler/github-ci/containers/cobbler-test-github:main
       - name: Setup Cobbler in the Container
         shell: 'script -q -e -c "bash {0}"'
         run: |
@@ -30,11 +30,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
       - name: Pull Docker Test Container
-        run: docker pull registry.opensuse.org/home/cobbler-project/github-ci/containers/cobbler-test-github:main
+        run: docker pull registry.opensuse.org/systemsmanagement/cobbler/github-ci/containers/cobbler-test-github:main
       - name: Run previously built Docker Container
-        run: docker run --privileged -t -d -v $PWD:/code --name cobbler registry.opensuse.org/home/cobbler-project/github-ci/containers/cobbler-test-github:main
+        run: docker run --privileged -t -d -v $PWD:/code --name cobbler registry.opensuse.org/systemsmanagement/cobbler/github-ci/containers/cobbler-test-github:main
       - name: Setup Cobbler in the Container
         shell: 'script -q -e -c "bash {0}"'
         run: |
@@ -49,11 +49,11 @@ jobs:
     runs-on: ubuntu-20.04
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
       - name: Pull Docker Test Container
-        run: docker pull registry.opensuse.org/home/cobbler-project/github-ci/containers/cobbler-test-github:main
+        run: docker pull registry.opensuse.org/systemsmanagement/cobbler/github-ci/containers/cobbler-test-github:main
       - name: Run previously built Docker Container
-        run: docker run --privileged -t -d -v $PWD:/code --name cobbler registry.opensuse.org/home/cobbler-project/github-ci/containers/cobbler-test-github:main
+        run: docker run --privileged -t -d -v $PWD:/code --name cobbler registry.opensuse.org/systemsmanagement/cobbler/github-ci/containers/cobbler-test-github:main
       - name: Setup Cobbler in the Container
         shell: 'script -q -e -c "bash {0}"'
         run: |
@@ -68,11 +68,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
       - name: Pull Docker Test Container
-        run: docker pull registry.opensuse.org/home/cobbler-project/github-ci/containers/cobbler-test-github:main
+        run: docker pull registry.opensuse.org/systemsmanagement/cobbler/github-ci/containers/cobbler-test-github:main
       - name: Run previously built Docker Container
-        run: docker run --privileged -t -d -v $PWD:/code --name cobbler registry.opensuse.org/home/cobbler-project/github-ci/containers/cobbler-test-github:main
+        run: docker run --privileged -t -d -v $PWD:/code --name cobbler registry.opensuse.org/systemsmanagement/cobbler/github-ci/containers/cobbler-test-github:main
       - name: Setup Cobbler in the Container
         shell: 'script -q -e -c "bash {0}"'
         run: |

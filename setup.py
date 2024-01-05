@@ -114,7 +114,7 @@ def gen_build_version():
             gitstamp, gitdate = data.decode("utf8").split("\n")
 
     with open(
-        os.path.join(OUTPUT_DIR, "version"), "w+", encoding="UTF-8"
+        os.path.join(OUTPUT_DIR, "version"), "w", encoding="UTF-8"
     ) as version_file:
         config = ConfigParser()
         config.add_section("cobbler")
@@ -583,6 +583,7 @@ if __name__ == "__main__":
             "dnspython",
             "file-magic",
             "schema",
+            "systemd-python",
             "gunicorn",
         ],
         extras_require={

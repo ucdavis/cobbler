@@ -14,6 +14,8 @@ Per default this builds an ISO for all available systems and profiles.
 
 If you want to generate multiple ISOs you need to execute this command multiple times (with different ``--iso`` names).
 
+NOTE: This feature is currently only supported for the following architectures: x86_64, ppc, ppc64, ppc64le and ppc64el.
+
 Under the hood
 ##############
 
@@ -22,7 +24,7 @@ Thus we don't execute "mkisofs" anymore. Please be aware of this when adding CLI
 
 On the Python side we are executing the following command:
 
-.. code::
+.. code-block:: shell
 
    xorriso -as mkisofs $XORRISOFS_OPTS -isohybrid-mbr $ISOHDPFX_location -c isolinux/boot.cat \
      -b isolinux/isolinux.bin -no-emul-boot -boot-load-size 4 -boot-info-table -eltorito-alt-boot \
@@ -31,7 +33,7 @@ On the Python side we are executing the following command:
 
 Explanation what this command is doing:
 
-.. code::
+.. code-block:: shell
 
    xorriso -as mkisofs \
      -isohybrid-mbr /usr/share/syslinux/isohdpfx.bin \  # --> Makes the image MBR bootable and specifies the MBR File
