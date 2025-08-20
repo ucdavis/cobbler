@@ -29,6 +29,7 @@ apt autoremove --purge
 /etc/cobbler/secondary.template
 /etc/cobbler/settings.yaml
 /etc/apache2/sites-available/cobbler.conf
+/etc/default/isc-dhcp-server
 ```
 
 ## Post installation bootstrapping
