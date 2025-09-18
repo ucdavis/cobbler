@@ -62,7 +62,9 @@ systemctl enable --now cobblerd.service cobblerd-gunicorn.service
 ```
 
 ## DHCP daemon patch
+
 Add a cobbler sync trigger with this script:
+
 `/var/lib/cobbler/triggers/sync/post/restart-isc-dhcp-server`
 ```
 #! /bin/bash
