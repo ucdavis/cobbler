@@ -61,6 +61,16 @@ systemctl enable --now cobblerd.service cobblerd-gunicorn.service
 
 ```
 
+## DHCP daemon patch
+Add a cobbler sync trigger with this script:
+`/var/lib/cobbler/triggers/sync/post/restart-isc-dhcp-server`
+```
+#! /bin/bash
+
+systemctl restart isc-dhcp-server.service
+```
+
+
 ## Import Ubuntu Jammy as a distro and create the profile
 ```bash
 # VERY IMPORTANT that this finish successfully
